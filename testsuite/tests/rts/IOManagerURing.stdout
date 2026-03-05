@@ -1,0 +1,10 @@
+io_uring mixed I/O tests
+1. File I/O (sequential)... ok
+2. Pipe I/O (sequential)... ok
+3. Bidirectional socket I/O... ok
+4. Concurrent file + pipe... ok
+5. Concurrent file + socket... ok
+6. Concurrent file + pipe + socket (stress)... ok
+7. Many concurrent file writers/readers... ok
+8. Large file I/O... ok
+All tests passed.

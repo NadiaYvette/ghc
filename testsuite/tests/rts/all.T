@@ -640,6 +640,11 @@ test('IOManager', [js_skip, when(arch('wasm32'), skip), when(opsys('mingw32'), s
                    pre_cmd('$MAKE -s --no-print-directory IOManager.hs')],
                   compile_and_run, [''])
 
+# Test intermixed file, pipe, and socket I/O — exercises io_uring paths
+# in both threaded (safe FFI) and non-threaded (Cmm primop) RTS.
+test('IOManagerURing', [js_skip, when(arch('wasm32'), skip), when(opsys('mingw32'), skip)],
+                       compile_and_run, [''])
+
 test('T24142', [req_target_smp], compile_and_run, ['-threaded -with-rtsopts "-N2"'])
 
 test('T25232', [unless(have_profiling(), skip), only_ways(['normal','nonmoving','nonmoving_prof','nonmoving_thr_prof']), extra_ways(['nonmoving', 'nonmoving_prof'] + (['nonmoving_thr_prof'] if have_threaded() else []))], compile_and_run, [''])
