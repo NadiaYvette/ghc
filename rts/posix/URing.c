@@ -579,3 +579,165 @@ static bool enlargeTable(Capability *cap, CapIOManager *iomgr)
 }
 
 #endif /* IOMGR_ENABLED_URING */
+
+
+/* =========================================================================
+ * Blocking io_uring functions for safe FFI (threaded RTS support).
+ *
+ * These are available whenever liburing is built (IOMGR_BUILD_URING),
+ * regardless of whether io_uring is the active I/O manager. They use
+ * thread-local io_uring instances so they are safe to call from multiple
+ * OS threads concurrently (as happens in the threaded RTS).
+ *
+ * In the threaded RTS, these are called via safe FFI from Haskell.
+ * The safe FFI automatically releases the capability during the blocking
+ * wait, allowing other Haskell threads to run.
+ *
+ * The return convention matches io_uring CQE results:
+ *   >= 0 : bytes transferred (success)
+ *   <  0 : -errno (failure)
+ * ========================================================================= */
+
+#include "posix/URing.h"
+
+#if defined(IOMGR_BUILD_URING)
+
+#if !defined(IOMGR_ENABLED_URING)
+/* Only include these if not already included above */
+#include <liburing.h>
+#include <errno.h>
+#endif
+
+#include <pthread.h>
+
+static pthread_key_t tls_uring_key;
+static pthread_once_t tls_uring_once = PTHREAD_ONCE_INIT;
+
+static void destroyThreadLocalURing(void *ptr)
+{
+    struct io_uring *ring = (struct io_uring *)ptr;
+    if (ring != NULL) {
+        io_uring_queue_exit(ring);
+        free(ring);
+    }
+}
+
+static void initTlsURingKey(void)
+{
+    pthread_key_create(&tls_uring_key, destroyThreadLocalURing);
+}
+
+static struct io_uring * getThreadLocalURing(void)
+{
+    pthread_once(&tls_uring_once, initTlsURingKey);
+
+    struct io_uring *ring = pthread_getspecific(tls_uring_key);
+    if (ring == NULL) {
+        ring = malloc(sizeof(struct io_uring));
+        if (ring == NULL) return NULL;
+
+        /* Small ring — we only ever have one operation in flight at a time
+         * on this thread-local ring. */
+        int ret = io_uring_queue_init(4, ring, 0);
+        if (ret < 0) {
+            free(ring);
+            return NULL;
+        }
+
+        pthread_setspecific(tls_uring_key, ring);
+    }
+    return ring;
+}
+
+
+/* Submit a single IORING_OP_READ or IORING_OP_WRITE and block until
+ * it completes. Returns bytes transferred (>= 0) or -errno (< 0).
+ *
+ * This function may block for an extended period. In the threaded RTS,
+ * it should be called via safe FFI so the capability is released.
+ */
+static HsInt uringBlockingIOOp(int fd, void *buf, unsigned int len,
+                                bool is_read)
+{
+    struct io_uring *ring = getThreadLocalURing();
+    if (ring == NULL) {
+        /* io_uring init failed (e.g. old kernel). Fall back to read/write. */
+        ssize_t r;
+        do {
+            r = is_read ? read(fd, buf, len) : write(fd, buf, len);
+        } while (r == -1 && errno == EINTR);
+        return r >= 0 ? (HsInt)r : -(HsInt)errno;
+    }
+
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    if (sqe == NULL) {
+        /* Ring shouldn't be full (depth 4, no other ops), but handle it. */
+        io_uring_submit(ring);
+        sqe = io_uring_get_sqe(ring);
+        if (sqe == NULL) {
+            return -(HsInt)EAGAIN;
+        }
+    }
+
+    /* Offset -1: use current file position (like read()/write()). */
+    if (is_read) {
+        io_uring_prep_read(sqe, fd, buf, len, (uint64_t)-1);
+    } else {
+        io_uring_prep_write(sqe, fd, buf, len, (uint64_t)-1);
+    }
+    io_uring_sqe_set_data64(sqe, 0);
+    io_uring_submit(ring);
+
+    struct io_uring_cqe *cqe;
+    int ret;
+    do {
+        ret = io_uring_wait_cqe(ring, &cqe);
+    } while (ret == -EINTR);
+
+    if (ret < 0) {
+        return (HsInt)ret;  /* -errno */
+    }
+
+    int32_t res = cqe->res;
+    io_uring_cqe_seen(ring, cqe);
+    return (HsInt)res;
+}
+
+
+HsInt uring_read_blocking(int fd, void *buf, unsigned int len)
+{
+    return uringBlockingIOOp(fd, buf, len, true);
+}
+
+
+HsInt uring_write_blocking(int fd, void *buf, unsigned int len)
+{
+    return uringBlockingIOOp(fd, buf, len, false);
+}
+
+
+int uringIsSupported(void)
+{
+    return 1;
+}
+
+#else /* !IOMGR_BUILD_URING */
+
+int uringIsSupported(void)
+{
+    return 0;
+}
+
+HsInt uring_read_blocking(int fd STG_UNUSED, void *buf STG_UNUSED,
+                           unsigned int len STG_UNUSED)
+{
+    barf("uring_read_blocking: io_uring not supported");
+}
+
+HsInt uring_write_blocking(int fd STG_UNUSED, void *buf STG_UNUSED,
+                            unsigned int len STG_UNUSED)
+{
+    barf("uring_write_blocking: io_uring not supported");
+}
+
+#endif /* IOMGR_BUILD_URING */

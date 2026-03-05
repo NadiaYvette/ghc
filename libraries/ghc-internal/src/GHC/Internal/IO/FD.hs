@@ -604,6 +604,7 @@ readRawBufferPtr loc !fd !buf !off !len
 #else
   | isNonBlocking fd = unsafe_read -- unsafe is ok, it can't block
   | usingAsyncIO = asyncIOReadRawBufferPtr loc fd buf off len
+  | threaded && uringSupported = uringReadRawBufferPtr loc fd buf off len
   | otherwise    = do r <- throwErrnoIfMinus1 loc
                                 (unsafe_fdReady (fdFD fd) 0 0 0)
                       if r /= 0
@@ -652,6 +653,7 @@ writeRawBufferPtr loc !fd !buf !off !len
 #else
   | isNonBlocking fd = unsafe_write -- unsafe is ok, it can't block
   | usingAsyncIO = asyncIOWriteRawBufferPtr loc fd buf off len
+  | threaded && uringSupported = uringWriteRawBufferPtr loc fd buf off len
   | otherwise   = do r <- unsafe_fdReady (fdFD fd) 1 0 0
                      if r /= 0
                         then write
@@ -731,6 +733,28 @@ asyncIOWriteRawBufferPtr loc !fd !buf !off !len =
                             (Errno (fromIntegral (negate r)))
                             Nothing Nothing)) s'
     }}}
+
+-- Blocking io_uring I/O via safe FFI for the threaded RTS.
+-- The safe FFI call releases the capability while the OS thread blocks
+-- in io_uring, allowing other Haskell threads to run.
+
+uringReadRawBufferPtr :: String -> FD -> Ptr Word8 -> Int -> CSize -> IO Int
+uringReadRawBufferPtr loc !fd !buf !off !len = do
+    r <- c_uring_read_blocking (fdFD fd) (buf `plusPtr` off) (fromIntegral len)
+    if r >= 0
+      then return r
+      else ioError (errnoToIOError loc
+                      (Errno (fromIntegral (negate r)))
+                      Nothing Nothing)
+
+uringWriteRawBufferPtr :: String -> FD -> Ptr Word8 -> Int -> CSize -> IO CInt
+uringWriteRawBufferPtr loc !fd !buf !off !len = do
+    r <- c_uring_write_blocking (fdFD fd) (buf `plusPtr` off) (fromIntegral len)
+    if r >= 0
+      then return (fromIntegral r)
+      else ioError (errnoToIOError loc
+                      (Errno (fromIntegral (negate r)))
+                      Nothing Nothing)
 #endif
 
 #else /* mingw32_HOST_OS.... */
@@ -826,6 +850,15 @@ foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 #endif
 
 foreign import ccall unsafe "syncIOReadAvailable" c_syncIOReadAvailable :: IO CInt
+foreign import ccall unsafe "uringIsSupported" c_uringIsSupported :: IO CInt
+
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
+foreign import ccall safe "uring_read_blocking"
+  c_uring_read_blocking :: CInt -> Ptr Word8 -> CUInt -> IO Int
+
+foreign import ccall safe "uring_write_blocking"
+  c_uring_write_blocking :: CInt -> Ptr Word8 -> CUInt -> IO Int
+#endif
 
 -- True if the current RTS is using the io_uring I/O manager,
 -- which supports true async I/O (IORING_OP_READ / IORING_OP_WRITE).
@@ -833,6 +866,13 @@ foreign import ccall unsafe "syncIOReadAvailable" c_syncIOReadAvailable :: IO CI
 usingAsyncIO :: Bool
 usingAsyncIO = case unsafePerformIO c_syncIOReadAvailable of
                  r -> r /= 0
+
+-- True if io_uring support was compiled in. Used for the threaded RTS
+-- path where we use safe FFI blocking calls instead of Cmm primops.
+{-# NOINLINE uringSupported #-}
+uringSupported :: Bool
+uringSupported = case unsafePerformIO c_uringIsSupported of
+                   r -> r /= 0
 
 -- -----------------------------------------------------------------------------
 -- utils

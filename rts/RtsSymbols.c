@@ -23,6 +23,10 @@
 #include "posix/Signals.h"
 #endif
 
+#if !defined(mingw32_HOST_OS) && !defined(wasm32_HOST_ARCH) && !defined(javascript_HOST_ARCH)
+#include "posix/URing.h"
+#endif
+
 #if defined(mingw32_HOST_OS)
 #include <sys/stat.h>
 #include <io.h>
@@ -74,7 +78,10 @@ extern char **environ;
       SymI_HasProto(signal_handlers)            \
       SymI_HasProto(stg_sig_install)            \
       SymI_HasProto(rtsTimerSignal)             \
-      SymI_NeedsDataProto(nocldstop)
+      SymI_NeedsDataProto(nocldstop)            \
+      SymI_HasProto(uring_read_blocking)        \
+      SymI_HasProto(uring_write_blocking)       \
+      SymI_HasProto(uringIsSupported)
 #endif
 
 #if defined(wasm32_HOST_ARCH)

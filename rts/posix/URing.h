@@ -48,3 +48,13 @@ void closeCapabilityIOManagerURing(CapIOManager *iomgr);
 #endif /* IOMGR_ENABLED_URING */
 
 #include "EndPrivate.h"
+
+/* Blocking I/O functions for use via safe FFI in the threaded RTS.
+ * When IOMGR_BUILD_URING is defined, these use thread-local io_uring
+ * instances. Otherwise they barf (but should never be called).
+ */
+HsInt uring_read_blocking(int fd, void *buf, unsigned int len);
+HsInt uring_write_blocking(int fd, void *buf, unsigned int len);
+
+/* Returns 1 if io_uring support was compiled in, 0 otherwise. */
+int uringIsSupported(void);
