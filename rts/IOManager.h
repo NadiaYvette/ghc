@@ -64,6 +64,9 @@
 #if defined(IOMGR_BUILD_WINIO)
     #define IOMGR_ENABLED_WINIO
 #endif
+#if defined(IOMGR_BUILD_URING) && !defined(THREADED_RTS)
+    #define IOMGR_ENABLED_URING
+#endif
 #if defined(IOMGR_BUILD_WIN32_LEGACY) && !defined(THREADED_RTS)
     #define IOMGR_ENABLED_WIN32_LEGACY
 #endif
@@ -85,6 +88,8 @@
 #else // !defined(THREADED_RTS)
 #if   defined(IOMGR_DEFAULT_NON_THREADED_SELECT)
     #define IOMGR_DEFAULT_STR "select"
+#elif defined(IOMGR_DEFAULT_NON_THREADED_URING)
+    #define IOMGR_DEFAULT_STR "uring"
 #elif defined(IOMGR_DEFAULT_NON_THREADED_POLL)
     #define IOMGR_DEFAULT_STR "poll"
 #elif defined(IOMGR_DEFAULT_NON_THREADED_WINIO)
@@ -110,6 +115,11 @@
 #else
     #define IOMGR_ENABLED_STR_POLL ""
 #endif
+#if defined(IOMGR_ENABLED_URING)
+    #define IOMGR_ENABLED_STR_URING " uring"
+#else
+    #define IOMGR_ENABLED_STR_URING ""
+#endif
 #if defined(IOMGR_ENABLED_MIO_POSIX) || defined(IOMGR_ENABLED_MIO_WIN32)
     #define IOMGR_ENABLED_STR_MIO " mio"
 #else
@@ -128,6 +138,7 @@
 #define IOMGRS_ENABLED_STR \
           IOMGR_ENABLED_STR_SELECT \
           IOMGR_ENABLED_STR_POLL \
+          IOMGR_ENABLED_STR_URING \
           IOMGR_ENABLED_STR_MIO \
           IOMGR_ENABLED_STR_WINIO \
           IOMGR_ENABLED_STR_WIN32_LEGACY
@@ -142,6 +153,9 @@ typedef enum {
 #endif
 #if defined(IOMGR_ENABLED_POLL)
     IO_MANAGER_POLL,
+#endif
+#if defined(IOMGR_ENABLED_URING)
+    IO_MANAGER_URING,
 #endif
 #if defined(IOMGR_ENABLED_MIO_POSIX)
     IO_MANAGER_MIO_POSIX,

@@ -29,6 +29,7 @@ data Flag = CrossCompiling
           | BootstrapThreadedRts
           | BootstrapEventLoggingRts
           | UseLibnuma
+          | UseLiburing
           | UseLibzstd
           | StaticLibzstd
           | UseLibm
@@ -52,6 +53,7 @@ flag f = do
             BootstrapThreadedRts -> "bootstrap-threaded-rts"
             BootstrapEventLoggingRts -> "bootstrap-event-logging-rts"
             UseLibnuma           -> "use-lib-numa"
+            UseLiburing          -> "use-lib-uring"
             UseLibzstd           -> "use-lib-zstd"
             StaticLibzstd        -> "static-lib-zstd"
             UseLibm              -> "use-lib-m"

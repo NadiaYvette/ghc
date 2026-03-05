@@ -46,6 +46,9 @@ flag libdw
 flag libnuma
   default: False
   manual: True
+flag liburing
+  default: False
+  manual: True
 flag libzstd
   default: False
   manual: True
@@ -258,6 +261,9 @@ library
       if flag(libnuma)
          extra-libraries: numa
          extra-libraries-static: numa
+      if flag(liburing)
+         extra-libraries: uring
+         extra-libraries-static: uring
       if flag(libzstd)
          if flag(static-libzstd)
             if os(darwin)
@@ -571,6 +577,7 @@ library
                    wasm/JSFFIGlobals.c
                    posix/Select.c
                    posix/Poll.c
+                   posix/URing.c
                    posix/Timeout.c
         cmm-sources: wasm/jsval.cmm
                      wasm/blocker.cmm
@@ -586,6 +593,7 @@ library
                     posix/Signals.c
                     posix/Timeout.c
                     posix/TTY.c
+                    posix/URing.c
                     -- ticker/*.c
                     -- We don't want to compile posix/ticker/*.c, these will be #included
                     -- from Ticker.c

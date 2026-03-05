@@ -20,6 +20,12 @@
 #include "TimeoutQueue.h"
 #endif
 
+#if defined(IOMGR_ENABLED_URING)
+#include <liburing.h>
+#include "ClosureTable.h"
+#include "TimeoutQueue.h"
+#endif
+
 #include "BeginPrivate.h"
 
 /* The per-capability data structures belonging to the I/O manager.
@@ -51,6 +57,16 @@ struct _CapIOManager {
 #if defined(IOMGR_ENABLED_POLL)
     /* Auxiliary table with size and indexes matching the aiop_table */
     struct pollfd *aiop_poll_table;
+#endif
+
+#if defined(IOMGR_ENABLED_URING)
+    /* The io_uring instance for this capability */
+    struct io_uring  uring;
+    bool             uring_initialized;
+
+    /* AIOP and timeout collections shared by several I/O manager impls */
+    ClosureTable     aiop_table;
+    StgTimeoutQueue *timeout_queue;
 #endif
 
 #if defined(IOMGR_ENABLED_WIN32_LEGACY)

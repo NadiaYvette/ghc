@@ -388,6 +388,13 @@ GHC_IOMANAGER_ENABLE([poll], [EnableIOManagerPoll], [IOMGR_BUILD_POLL],
        fi
    fi])
 
+GHC_IOMANAGER_ENABLE([uring], [EnableIOManagerURing], [IOMGR_BUILD_URING],
+  [if test "$HostOS" = "linux"; then
+       AC_CHECK_HEADER([liburing.h],
+           [EnableIOManagerURing=YES],
+           [EnableIOManagerURing=NO],[])
+   fi])
+
 GHC_IOMANAGER_ENABLE([mio], [EnableIOManagerMIO], [IOMGR_BUILD_MIO],
   [EnableIOManagerMIO=YES])
 
@@ -408,6 +415,7 @@ if test "$HostOS" = "mingw32"; then
 else
   GHC_IOMANAGER_DEFAULT_SELECT([IOManagerNonThreadedDefault], [select], [EnableIOManagerSelect])
   GHC_IOMANAGER_DEFAULT_SELECT([IOManagerNonThreadedDefault], [poll], [EnableIOManagerPoll])
+  GHC_IOMANAGER_DEFAULT_SELECT([IOManagerNonThreadedDefault], [uring], [EnableIOManagerURing])
   GHC_IOMANAGER_DEFAULT_SELECT([IOManagerThreadedDefault], [mio], [EnableIOManagerMIO])
 fi
 GHC_IOMANAGER_DEFAULT_CHECK_NOT_EMPTY([IOManagerNonThreadedDefault],[non-threaded])

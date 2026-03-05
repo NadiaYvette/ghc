@@ -303,6 +303,8 @@ rtsPackageArgs = package rts ? do
     libdwLibraryDir   <- queryTarget (Lib.libraryPath <=< tgtRTSWithLibdw)
     libnumaIncludeDir <- getSetting LibnumaIncludeDir
     libnumaLibraryDir <- getSetting LibnumaLibDir
+    liburingIncludeDir <- getSetting LiburingIncludeDir
+    liburingLibraryDir <- getSetting LiburingLibDir
     libzstdIncludeDir <- getSetting LibZstdIncludeDir
     libzstdLibraryDir <- getSetting LibZstdLibDir
 
@@ -414,6 +416,7 @@ rtsPackageArgs = package rts ? do
           , flag NeedLibatomic              `cabalFlag` "need-atomic"
           , useLibdw                        `cabalFlag` "libdw"
           , flag UseLibnuma                 `cabalFlag` "libnuma"
+          , flag UseLiburing               `cabalFlag` "liburing"
           , flag UseLibzstd                 `cabalFlag` "libzstd"
           , flag StaticLibzstd              `cabalFlag` "static-libzstd"
           , queryTargetTarget tgtSymbolsHaveLeadingUnderscore `cabalFlag` "leading-underscore"
@@ -424,6 +427,7 @@ rtsPackageArgs = package rts ? do
         , builder (Cabal Setup) ? mconcat
               [ useLibdw ? cabalExtraDirs (fromMaybe "" libdwIncludeDir) (fromMaybe "" libdwLibraryDir)
               , cabalExtraDirs libnumaIncludeDir libnumaLibraryDir
+              , cabalExtraDirs liburingIncludeDir liburingLibraryDir
               , cabalExtraDirs libzstdIncludeDir libzstdLibraryDir
               ]
         , builder (Cc (FindCDependencies CDep)) ? cArgs

@@ -56,6 +56,8 @@ data Setting = CursesIncludeDir
              | IconvLibDir
              | LibnumaIncludeDir
              | LibnumaLibDir
+             | LiburingIncludeDir
+             | LiburingLibDir
              | LibZstdIncludeDir
              | LibZstdLibDir
              | ProjectGitCommitId
@@ -94,6 +96,8 @@ setting key = lookupSystemConfig $ case key of
     IconvLibDir        -> "iconv-lib-dir"
     LibnumaIncludeDir  -> "libnuma-include-dir"
     LibnumaLibDir      -> "libnuma-lib-dir"
+    LiburingIncludeDir -> "liburing-include-dir"
+    LiburingLibDir     -> "liburing-lib-dir"
     LibZstdIncludeDir  -> "libzstd-include-dir"
     LibZstdLibDir      -> "libzstd-lib-dir"
     ProjectGitCommitId -> "project-git-commit-id"

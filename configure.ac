@@ -905,6 +905,11 @@ AC_SUBST(UseLibNuma)
 AC_SUBST(LibNumaLibDir)
 AC_SUBST(LibNumaIncludeDir)
 
+FP_FIND_LIBURING
+AC_SUBST(UseLibURing)
+AC_SUBST(LibUringLibDir)
+AC_SUBST(LibUringIncludeDir)
+
 dnl ** Documentation
 dnl --------------------------------------------------------------
 if test -n "$SPHINXBUILD"; then
@@ -1045,7 +1050,8 @@ echo "\
 
 echo "\
    Using optional dependencies:
-      libnuma : $UseLibNuma
+      libnuma  : $UseLibNuma
+      liburing : $UseLibURing
       libzstd : $UseLibZstd
          statically linked? : ${UseStaticLibZstd:-N/A}
       libdw   : $UseLibdw

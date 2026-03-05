@@ -102,6 +102,9 @@ ffi-lib-dir       = @FFILibDir@
 libnuma-include-dir   = @LibNumaIncludeDir@
 libnuma-lib-dir       = @LibNumaLibDir@
 
+liburing-include-dir  = @LibUringIncludeDir@
+liburing-lib-dir      = @LibUringLibDir@
+
 libzstd-include-dir   = @LibZstdIncludeDir@
 libzstd-lib-dir       = @LibZstdLibDir@
 
@@ -111,6 +114,7 @@ libzstd-lib-dir       = @LibZstdLibDir@
 use-lib-zstd      = @UseLibZstd@
 static-lib-zstd   = @UseStaticLibZstd@
 use-lib-numa      = @UseLibNuma@
+use-lib-uring     = @UseLibURing@
 use-lib-m         = @UseLibm@
 use-lib-rt        = @UseLibrt@
 use-lib-dl        = @UseLibdl@
