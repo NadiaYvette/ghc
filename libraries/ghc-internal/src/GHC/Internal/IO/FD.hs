@@ -2,6 +2,8 @@
 {-# LANGUAGE CPP
            , NoImplicitPrelude
            , BangPatterns
+           , MagicHash
+           , UnboxedTuples
            , RankNTypes
   #-}
 {-# OPTIONS_GHC -Wno-identities #-}
@@ -57,6 +59,9 @@ import GHC.Internal.Foreign.C.Types
 import GHC.Internal.Foreign.C.Error
 import GHC.Internal.Foreign.Marshal.Utils
 import GHC.Internal.Foreign.Marshal.Alloc (allocaBytes)
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
+import GHC.Internal.Prim.Ext (asyncIORead#, asyncIOWrite#)
+#endif
 
 import qualified GHC.Internal.System.Posix.Internals
 import GHC.Internal.System.Posix.Internals hiding (FD, setEcho, getEcho)
@@ -598,6 +603,7 @@ readRawBufferPtr loc !fd !buf !off !len
     throwErrnoIfMinus1 loc (c_read (fdFD fd) (buf `plusPtr` off) len)
 #else
   | isNonBlocking fd = unsafe_read -- unsafe is ok, it can't block
+  | usingAsyncIO = asyncIOReadRawBufferPtr loc fd buf off len
   | otherwise    = do r <- throwErrnoIfMinus1 loc
                                 (unsafe_fdReady (fdFD fd) 0 0 0)
                       if r /= 0
@@ -645,6 +651,7 @@ writeRawBufferPtr loc !fd !buf !off !len
     throwErrnoIfMinus1 loc (c_write (fdFD fd) (buf `plusPtr` off) len)
 #else
   | isNonBlocking fd = unsafe_write -- unsafe is ok, it can't block
+  | usingAsyncIO = asyncIOWriteRawBufferPtr loc fd buf off len
   | otherwise   = do r <- unsafe_fdReady (fdFD fd) 1 0 0
                      if r /= 0
                         then write
@@ -687,6 +694,43 @@ isNonBlocking fd = fdIsNonBlocking fd /= 0
 
 foreign import ccall unsafe "fdReady"
   unsafe_fdReady :: CInt -> CBool -> Int64 -> CBool -> IO CInt
+
+-- True async I/O using io_uring: submit read/write directly to the kernel.
+-- The thread blocks until the kernel completes the operation, and the result
+-- is the number of bytes transferred. No separate readiness check or read()
+-- syscall is needed — io_uring does both in one step.
+
+asyncIOReadRawBufferPtr :: String -> FD -> Ptr Word8 -> Int -> CSize -> IO Int
+asyncIOReadRawBufferPtr loc !fd !buf !off !len =
+    case fromIntegral (fdFD fd) of { I# fd# ->
+    case buf `plusPtr` off of { Ptr addr# ->
+    case fromIntegral len of { I# len# ->
+    IO $ \s ->
+      case asyncIORead# fd# addr# len# s of
+        (# s', r# #) ->
+          let r = I# r#
+          in if r >= 0
+               then (# s', r #)
+               else unIO (ioError (errnoToIOError loc
+                            (Errno (fromIntegral (negate r)))
+                            Nothing Nothing)) s'
+    }}}
+
+asyncIOWriteRawBufferPtr :: String -> FD -> Ptr Word8 -> Int -> CSize -> IO CInt
+asyncIOWriteRawBufferPtr loc !fd !buf !off !len =
+    case fromIntegral (fdFD fd) of { I# fd# ->
+    case buf `plusPtr` off of { Ptr addr# ->
+    case fromIntegral len of { I# len# ->
+    IO $ \s ->
+      case asyncIOWrite# fd# addr# len# s of
+        (# s', r# #) ->
+          let r = I# r#
+          in if r >= 0
+               then (# s', fromIntegral r #)
+               else unIO (ioError (errnoToIOError loc
+                            (Errno (fromIntegral (negate r)))
+                            Nothing Nothing)) s'
+    }}}
 #endif
 
 #else /* mingw32_HOST_OS.... */
@@ -780,6 +824,15 @@ foreign import ccall safe "send"
 #if !defined(javascript_HOST_ARCH)
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 #endif
+
+foreign import ccall unsafe "syncIOReadAvailable" c_syncIOReadAvailable :: IO CInt
+
+-- True if the current RTS is using the io_uring I/O manager,
+-- which supports true async I/O (IORING_OP_READ / IORING_OP_WRITE).
+{-# NOINLINE usingAsyncIO #-}
+usingAsyncIO :: Bool
+usingAsyncIO = case unsafePerformIO c_syncIOReadAvailable of
+                 r -> r /= 0
 
 -- -----------------------------------------------------------------------------
 -- utils

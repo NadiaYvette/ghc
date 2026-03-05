@@ -24,6 +24,7 @@
 #include "RtsFlags.h"
 #include "RtsUtils.h"
 #include "sm/Evac.h"
+#include <errno.h>
 
 #include "IOManagerInternals.h"
 
@@ -1027,6 +1028,67 @@ void syncDelayCancel(Capability *cap, StgTSO *tso)
         default:
             barf("syncDelayCancel not supported for I/O manager %d", iomgr_type);
     }
+}
+
+
+StgAsyncIOOp * syncIORead(Capability *cap, StgTSO *tso,
+                           HsInt fd, void *buf, HsInt len)
+{
+    debugTrace(DEBUG_iomanager,
+               "thread %ld async read on fd %d, len %ld",
+               (long) tso->id, (int) fd, (long) len);
+    ASSERT(tso->why_blocked == NotBlocked);
+    switch (iomgr_type) {
+#if defined(IOMGR_ENABLED_URING)
+        case IO_MANAGER_URING:
+            return syncIOReadURing(cap, tso, fd, buf, len);
+#endif
+        default:
+            barf("asyncIORead# not available for current I/O manager");
+    }
+}
+
+
+StgAsyncIOOp * syncIOWrite(Capability *cap, StgTSO *tso,
+                            HsInt fd, void *buf, HsInt len)
+{
+    debugTrace(DEBUG_iomanager,
+               "thread %ld async write on fd %d, len %ld",
+               (long) tso->id, (int) fd, (long) len);
+    ASSERT(tso->why_blocked == NotBlocked);
+    switch (iomgr_type) {
+#if defined(IOMGR_ENABLED_URING)
+        case IO_MANAGER_URING:
+            return syncIOWriteURing(cap, tso, fd, buf, len);
+#endif
+        default:
+            barf("asyncIOWrite# not available for current I/O manager");
+    }
+}
+
+
+/* Extract the result from a completed StgAsyncIOOp.
+ * Returns bytes transferred on success (>= 0), or -errno on failure (< 0).
+ * This is called from the Cmm return continuation stg_block_asyncio.
+ */
+HsInt asyncIOResult(StgAsyncIOOp *aiop)
+{
+    switch (aiop->outcome) {
+        case IOOpOutcomeSuccess:   return (HsInt)aiop->result;
+        case IOOpOutcomeFailed:    return -(HsInt)aiop->error;
+        case IOOpOutcomeCancelled: return -(HsInt)ECANCELED;
+        default:                   return -(HsInt)EINVAL;
+    }
+}
+
+
+int syncIOReadAvailable(void)
+{
+#if defined(IOMGR_ENABLED_URING)
+    return iomgr_type == IO_MANAGER_URING;
+#else
+    return 0;
+#endif
 }
 
 

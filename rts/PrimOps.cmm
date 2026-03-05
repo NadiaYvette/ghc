@@ -2326,6 +2326,47 @@ stg_delayzh ( W_ us_delay )
 }
 
 
+/* True async I/O primops for io_uring.
+ *
+ * These submit IORING_OP_READ / IORING_OP_WRITE to the kernel and block the
+ * thread. When the kernel completes the operation, the thread is woken and
+ * the stg_block_asyncio return continuation extracts the result.
+ *
+ * Returns: Int# — bytes transferred (>= 0) on success, -errno (< 0) on failure.
+ */
+stg_asyncIOReadzh ( W_ fd, W_ buf, W_ len )
+{
+    P_ aiop;
+
+    ("ptr" aiop) = ccall syncIORead(MyCapability() "ptr", CurrentTSO "ptr",
+                                     fd, buf "ptr", len);
+    if (aiop != 0) {
+        Sp_adj(-2);
+        Sp(1) = aiop;
+        Sp(0) = stg_block_asyncio_info;
+        BLOCK_GENERIC;
+    } else {
+        jump stg_raisezh(HsIface_heapOverflow_closure(W_[ghc_hs_iface]));
+    }
+}
+
+stg_asyncIOWritezh ( W_ fd, W_ buf, W_ len )
+{
+    P_ aiop;
+
+    ("ptr" aiop) = ccall syncIOWrite(MyCapability() "ptr", CurrentTSO "ptr",
+                                      fd, buf "ptr", len);
+    if (aiop != 0) {
+        Sp_adj(-2);
+        Sp(1) = aiop;
+        Sp(0) = stg_block_asyncio_info;
+        BLOCK_GENERIC;
+    } else {
+        jump stg_raisezh(HsIface_heapOverflow_closure(W_[ghc_hs_iface]));
+    }
+}
+
+
 #if defined(mingw32_HOST_OS)
 stg_asyncReadzh ( W_ fd, W_ is_sock, W_ len, W_ buf )
 {

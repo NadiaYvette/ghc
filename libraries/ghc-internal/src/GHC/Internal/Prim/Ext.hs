@@ -39,6 +39,8 @@ module GHC.Internal.Prim.Ext
   , asyncWrite#
   , asyncDoProc#
 #endif
+  , asyncIORead#
+  , asyncIOWrite#
   ) where
 
 import GHC.Internal.Prim
@@ -80,6 +82,24 @@ foreign import prim "stg_asyncDoProczh" asyncDoProc#
   -> (# State# RealWorld, Int#, Int# #)
 
 #endif
+
+-- | Asynchronously read bytes from specified file descriptor using io_uring.
+-- Returns bytes transferred (>= 0) on success, or -errno (< 0) on failure.
+foreign import prim "stg_asyncIOReadzh" asyncIORead#
+  :: Int#
+  -> Addr#
+  -> Int#
+  -> State# RealWorld
+  -> (# State# RealWorld, Int# #)
+
+-- | Asynchronously write bytes to specified file descriptor using io_uring.
+-- Returns bytes transferred (>= 0) on success, or -errno (< 0) on failure.
+foreign import prim "stg_asyncIOWritezh" asyncIOWrite#
+  :: Int#
+  -> Addr#
+  -> Int#
+  -> State# RealWorld
+  -> (# State# RealWorld, Int# #)
 
 ------------------------------------------------------------------------
 -- Misc

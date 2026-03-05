@@ -742,6 +742,24 @@ stg_block_async_void
 
 
 /* -----------------------------------------------------------------------------
+   True async I/O (io_uring) return continuation.
+
+   When a thread blocked on asyncIORead#/asyncIOWrite# is woken, it
+   resumes at stg_block_asyncio_info. The stack frame contains the
+   StgAsyncIOOp pointer. We call asyncIOResult to extract the result
+   (bytes transferred >= 0, or -errno < 0) and return it to the caller.
+   -------------------------------------------------------------------------- */
+
+INFO_TABLE_RET ( stg_block_asyncio, RET_SMALL, W_ info_ptr, P_ aiop )
+    return ()
+{
+    W_ r;
+    (r) = ccall asyncIOResult(aiop "ptr");
+    return (r);
+}
+
+
+/* -----------------------------------------------------------------------------
    STM-specific waiting
    -------------------------------------------------------------------------- */
 

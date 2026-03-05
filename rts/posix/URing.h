@@ -28,6 +28,15 @@ bool asyncIOWaitReadyURing(Capability *cap, StgAsyncIOOp *aiop,
                            IOReadOrWrite rw, int fd);
 void asyncIOCancelURing(Capability *cap, StgAsyncIOOp *aiop);
 
+/* True async I/O: submit IORING_OP_READ/IORING_OP_WRITE directly.
+ * Returns the StgAsyncIOOp on success, or NULL on allocation failure.
+ * The TSO is blocked; the caller (Cmm primop) should deschedule it.
+ */
+StgAsyncIOOp * syncIOReadURing(Capability *cap, StgTSO *tso,
+                                HsInt fd, void *buf, HsInt len);
+StgAsyncIOOp * syncIOWriteURing(Capability *cap, StgTSO *tso,
+                                 HsInt fd, void *buf, HsInt len);
+
 /* Scheduler operations */
 bool anyPendingTimeoutsOrIOURing(CapIOManager *iomgr);
 void pollCompletedTimeoutsOrIOURing(Capability *cap);

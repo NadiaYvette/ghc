@@ -103,6 +103,9 @@ static bool enlargeTable(Capability *cap, CapIOManager *iomgr);
 static void notifyIOCompletion(Capability *cap, StgAsyncIOOp *aiop);
 static void ioCancel(Capability *cap, StgAsyncIOOp *aiop);
 static void processCompletions(Capability *cap, CapIOManager *iomgr);
+static StgAsyncIOOp * submitIOOp(Capability *cap, StgTSO *tso,
+                                  int fd, void *buf, unsigned nbytes,
+                                  bool is_read);
 
 
 void initCapabilityIOManagerURing(CapIOManager *iomgr)
@@ -473,6 +476,97 @@ void awaitCompletedTimeoutsOrIOURing(Capability *cap)
 
     } while (emptyRunQueue(cap)
          && (getSchedState() == SCHED_RUNNING));
+}
+
+
+/* Submit an IORING_OP_READ or IORING_OP_WRITE for true async I/O.
+ *
+ * This allocates a StgAsyncIOOp, inserts it into the ClosureTable, and submits
+ * the operation to io_uring. The TSO is blocked and will be woken when the
+ * kernel completes the I/O. The CQE result will be the number of bytes
+ * transferred (for success) or -errno (for failure), which gets stored in the
+ * aiop's result/error field by processCompletions.
+ *
+ * We use offset (uint64_t)-1 which tells io_uring to use the current file
+ * position (equivalent to read()/write() without explicit seek).
+ */
+static StgAsyncIOOp * submitIOOp(Capability *cap, StgTSO *tso,
+                                  int fd, void *buf, unsigned nbytes,
+                                  bool is_read)
+{
+    StgAsyncIOOp *aiop;
+    aiop = (StgAsyncIOOp *)allocateMightFail(cap, sizeofW(StgAsyncIOOp));
+    if (RTS_UNLIKELY(aiop == NULL)) return NULL;
+    SET_HDR(aiop, &stg_ASYNCIOOP_info, cap->r.rCCCS);
+    aiop->notify.tso     = tso;
+    aiop->notify_type    = NotifyTSO;
+    aiop->live           = &stg_ASYNCIO_LIVE0_closure;
+    tso->why_blocked     = is_read ? BlockedOnRead : BlockedOnWrite;
+    tso->block_info.aiop = aiop;
+
+    CapIOManager *iomgr = cap->iomgr;
+    if (RTS_UNLIKELY(isFullClosureTable(&iomgr->aiop_table))) {
+        bool ok = enlargeTable(cap, iomgr);
+        if (RTS_UNLIKELY(!ok)) return NULL;
+    }
+
+    int ix = insertClosureTable(cap, &iomgr->aiop_table, aiop);
+
+    aiop->capno   = cap->no;
+    aiop->index   = ix;
+    aiop->outcome = IOOpOutcomeInFlight;
+
+    /* Get a submission queue entry */
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&iomgr->uring);
+    if (RTS_UNLIKELY(sqe == NULL)) {
+        io_uring_submit(&iomgr->uring);
+        sqe = io_uring_get_sqe(&iomgr->uring);
+        if (RTS_UNLIKELY(sqe == NULL)) {
+            removeClosureTable(cap, &iomgr->aiop_table, ix);
+            return NULL;
+        }
+    }
+
+    /* Submit the actual read/write operation.
+     * Offset -1 means "use current file position" (like read()/write()).
+     */
+    if (is_read) {
+        io_uring_prep_read(sqe, fd, buf, nbytes, (uint64_t)-1);
+    } else {
+        io_uring_prep_write(sqe, fd, buf, nbytes, (uint64_t)-1);
+    }
+    io_uring_sqe_set_data64(sqe, (uint64_t)ix);
+
+    int ret = io_uring_submit(&iomgr->uring);
+    if (RTS_UNLIKELY(ret < 0)) {
+        if (ret == -EINTR) {
+            ret = io_uring_submit(&iomgr->uring);
+        }
+        if (ret < 0) {
+            removeClosureTable(cap, &iomgr->aiop_table, ix);
+            return NULL;
+        }
+    }
+
+    debugTrace(DEBUG_iomanager,
+               "io_uring submitted %s: fd=%d, buf=%p, len=%u, index=%d",
+               is_read ? "read" : "write", fd, buf, nbytes, ix);
+
+    return aiop;
+}
+
+
+StgAsyncIOOp * syncIOReadURing(Capability *cap, StgTSO *tso,
+                                HsInt fd, void *buf, HsInt len)
+{
+    return submitIOOp(cap, tso, (int)fd, buf, (unsigned)len, true);
+}
+
+
+StgAsyncIOOp * syncIOWriteURing(Capability *cap, StgTSO *tso,
+                                 HsInt fd, void *buf, HsInt len)
+{
+    return submitIOOp(cap, tso, (int)fd, buf, (unsigned)len, false);
 }
 
 

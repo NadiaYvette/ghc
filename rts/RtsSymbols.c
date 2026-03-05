@@ -877,6 +877,11 @@ extern char **environ;
       SymI_HasDataProto(stg_unsafeThawArrayzh)                              \
       SymI_HasDataProto(stg_waitReadzh)                                     \
       SymI_HasDataProto(stg_waitWritezh)                                    \
+      SymI_HasDataProto(stg_asyncIOReadzh)                                  \
+      SymI_HasDataProto(stg_asyncIOWritezh)                                 \
+      SymI_HasProto(stg_block_asyncio_info)                                 \
+      SymI_HasProto(syncIOReadAvailable)                                    \
+      SymI_HasProto(asyncIOResult)                                          \
       SymI_HasDataProto(stg_writeTVarzh)                                    \
       SymI_HasDataProto(stg_yieldzh)                                        \
       SymI_NeedsProto(stg_badAlignment_entry)                           \

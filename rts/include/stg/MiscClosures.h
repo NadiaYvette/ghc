@@ -436,6 +436,8 @@ RTS_RET(stg_block_takemvar);
 RTS_RET(stg_block_readmvar);
 RTS_FUN_DECL(stg_block_putmvar);
 RTS_RET(stg_block_putmvar);
+RTS_RET(stg_block_asyncio);
+
 #if defined(mingw32_HOST_OS)
 RTS_FUN_DECL(stg_block_async);
 RTS_RET(stg_block_async);
@@ -518,6 +520,8 @@ RTS_FUN_DECL(stg_tryReadMVarzh);
 RTS_FUN_DECL(stg_waitReadzh);
 RTS_FUN_DECL(stg_waitWritezh);
 RTS_FUN_DECL(stg_delayzh);
+RTS_FUN_DECL(stg_asyncIOReadzh);
+RTS_FUN_DECL(stg_asyncIOWritezh);
 #if defined(mingw32_HOST_OS)
 RTS_FUN_DECL(stg_asyncReadzh);
 RTS_FUN_DECL(stg_asyncWritezh);

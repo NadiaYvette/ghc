@@ -333,6 +333,27 @@ void syncIOCancel(Capability *cap, StgTSO *tso);
 /* Result is true on success, or false on allocation failure. */
 bool syncDelay(Capability *cap, StgTSO *tso, HsInt us_delay);
 
+/* True async I/O: submit an actual read/write operation to the kernel.
+ * Returns the StgAsyncIOOp pointer on success (caller should block the TSO),
+ * or NULL on failure. Only available with the io_uring I/O manager.
+ */
+StgAsyncIOOp * syncIORead(Capability *cap, StgTSO *tso,
+                           HsInt fd, void *buf, HsInt len);
+StgAsyncIOOp * syncIOWrite(Capability *cap, StgTSO *tso,
+                            HsInt fd, void *buf, HsInt len);
+
+/* Extract result from a completed async I/O operation.
+ * Returns bytes transferred (>= 0) on success, or -errno (< 0) on failure.
+ * Called from the Cmm return continuation stg_block_asyncio.
+ */
+HsInt asyncIOResult(StgAsyncIOOp *aiop);
+
+/* Query whether the current I/O manager supports true async I/O (io_uring).
+ * Used by Haskell code to decide between async I/O and readiness-based paths.
+ * Returns non-zero if available, zero if not.
+ */
+int syncIOReadAvailable(void);
+
 void syncDelayCancel(Capability *cap, StgTSO *tso);
 
 #if defined(IOMGR_ENABLED_SELECT) || defined(IOMGR_ENABLED_WIN32_LEGACY)
