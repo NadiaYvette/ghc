@@ -1630,7 +1630,7 @@ arityType env (Let (Rec prs) e)
     floatIn (allCosts bind_cost prs) (arityType env' e)
   where
     bind_cost (b,e) = exprCost env' e (Just (idType b))
-    env'            = foldl extend_rec env prs
+    env'            = foldl' extend_rec env prs
     extend_rec :: ArityEnv -> (Id,CoreExpr) -> ArityEnv
     extend_rec env (b,_) = extendSigEnv env b  $
                            idArityType b

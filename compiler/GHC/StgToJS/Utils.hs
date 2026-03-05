@@ -419,7 +419,7 @@ stgLneLive' b = filter (`notElem` bindees b) (stgLneLive b)
 
 stgLneLive :: CgStgBinding -> [Id]
 stgLneLive (StgNonRec _b e) = stgLneLiveExpr e
-stgLneLive (StgRec bs)      = L.nub $ concatMap (stgLneLiveExpr . snd) bs
+stgLneLive (StgRec bs)      = ordNub $ concatMap (stgLneLiveExpr . snd) bs
 
 stgLneLiveExpr :: CgStgRhs -> [Id]
 stgLneLiveExpr rhs = dVarSetElems (liveVars $ stgRhsLive rhs)

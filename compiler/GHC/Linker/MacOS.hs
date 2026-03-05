@@ -23,7 +23,8 @@ import GHC.Utils.CliOption
 import GHC.Utils.Exception
 import GHC.Utils.Logger
 
-import Data.List (isPrefixOf, nub, sort, intersperse, intercalate)
+import Data.List (isPrefixOf, intersperse, intercalate)
+import GHC.Utils.Misc (nubSort)
 import Data.Char
 import Data.Maybe
 import Control.Monad (join, forM, filterM, void)
@@ -57,7 +58,7 @@ runInjectRPaths logger otool_opts install_name_opts lib_paths dylib = do
   let paths = mapMaybe get_rpath info
       lib_paths' = [ p | p <- lib_paths, not (p `elem` paths) ]
   -- only find those rpaths, that aren't already in the library.
-  rpaths <- nub . sort . join <$> forM libs (\f -> filterM (\l -> doesFileExist (l </> f)) lib_paths')
+  rpaths <- nubSort . join <$> forM libs (\f -> filterM (\l -> doesFileExist (l </> f)) lib_paths')
   -- inject the rpaths
   case rpaths of
     [] -> return ()

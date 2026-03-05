@@ -36,7 +36,7 @@ import GHC.Utils.Outputable
 import GHC.Utils.Panic
 import GHC.Utils.Misc
 
-import Data.List (sortOn, sortBy, nub)
+import Data.List (sortOn, sortBy)
 import Data.List.NonEmpty (nonEmpty)
 import qualified Data.List.NonEmpty as NE
 import Data.Foldable (toList)
@@ -490,7 +490,7 @@ mergeChains edges chains
 
         merge :: forall s. [CfgEdge] -> LabelMap (Point s BlockChain) -> ST s BlockChain
         merge [] chains = do
-            chains' <- mapM find =<< (nub <$> (mapM repr $ mapElems chains)) :: ST s [BlockChain]
+            chains' <- mapM find =<< (ordNub <$> (mapM repr $ mapElems chains)) :: ST s [BlockChain]
             return $ foldl' chainConcat (Partial.head chains') (Partial.tail chains')
         merge ((CfgEdge from to _):edges) chains
         --   | pprTrace "merge" (ppr (from,to) <> ppr chains) False
