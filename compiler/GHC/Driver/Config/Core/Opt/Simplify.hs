@@ -53,6 +53,7 @@ initSimplifyOpts dflags extra_vars iterations mode hpt_rule_base = let
     , so_hpt_rules       = hpt_rule_base
     , so_top_env_cfg     = TopEnvConfig { te_history_size = historySize dflags
                                         , te_tick_factor = simplTickFactor dflags }
+    , so_incremental     = gopt Opt_IncrementalSimplifier dflags
     }
   in opts
 

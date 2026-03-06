@@ -2579,6 +2579,7 @@ fFlagsDeps = [
   flagSpec "omit-yields"                      Opt_OmitYields,
   flagSpec "optimal-applicative-do"           Opt_OptimalApplicativeDo,
   flagSpec "pedantic-bottoms"                 Opt_PedanticBottoms,
+  flagSpec "incremental-simplifier"            Opt_IncrementalSimplifier,
   flagSpec "pre-inlining"                     Opt_SimplPreInlining,
   flagGhciSpec "print-bind-contents"          Opt_PrintBindContents,
   flagGhciSpec "print-bind-result"            Opt_PrintBindResult,

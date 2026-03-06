@@ -8,7 +8,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE MultiWayIf #-}
 
-module GHC.Core.Opt.Simplify.Iteration ( simplTopBinds, simplExpr, simplImpRules ) where
+module GHC.Core.Opt.Simplify.Iteration ( simplTopBinds, simplTopBindsIncr, simplExpr, simplImpRules ) where
 
 import GHC.Prelude
 
@@ -30,7 +30,7 @@ import GHC.Core.Reduction
 import GHC.Core.Coercion.Opt    ( optCoercion )
 import GHC.Core.FamInstEnv      ( FamInstEnv, topNormaliseType_maybe )
 import GHC.Core.DataCon
-import GHC.Core.Opt.Stats ( Tick(..) )
+import GHC.Core.Opt.Stats ( Tick(..), simplCountN )
 import GHC.Core.Ppr     ( pprCoreExpr )
 import GHC.Core.Unfold
 import GHC.Core.Unfold.Make
@@ -39,7 +39,7 @@ import GHC.Core.Opt.Arity ( ArityType, exprArity, arityTypeBotSigs_maybe
                           , pushCoTyArg, pushCoValArg, exprIsDeadEnd
                           , typeArity, arityTypeArity, etaExpandAT )
 import GHC.Core.SimpleOpt ( exprIsConApp_maybe, joinPointBinding_maybe, joinPointBindings_maybe )
-import GHC.Core.FVs     ( mkRuleInfo {- exprsFreeIds -} )
+import GHC.Core.FVs     ( mkRuleInfo, exprFreeIds )
 import GHC.Core.Rules   ( lookupRule, getRules )
 import GHC.Core.Multiplicity
 
@@ -70,8 +70,12 @@ import GHC.Utils.Monad  ( mapAccumLM, liftIO )
 import GHC.Utils.Logger
 import GHC.Utils.Misc
 
+import GHC.Types.Var.Set
+import GHC.Types.Var.Env  ( IdEnv, lookupVarEnv, emptyVarEnv, extendVarEnv_C )
+
 import Control.Monad
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.IORef
 
 {-
 The guts of the simplifier is in this module, but the driver loop for
@@ -231,6 +235,99 @@ simplTopBinds env0 binds0
       = do { let bind_cxt = BC_Let TopLevel NonRecursive
            ; (env', b') <- addBndrRules env b (lookupRecBndr env b) bind_cxt
            ; simplRecOrTopPair env' bind_cxt b b' r }
+
+{-
+Note [Incremental simplification]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+simplTopBindsIncr is the incremental variant of simplTopBinds. Instead of
+simplifying every binding on every iteration, it skips bindings that are
+"clean" — bindings whose own RHS and whose dependencies haven't changed.
+
+The dirty set (an IORef VarSet) tracks which binders need re-simplification.
+It is updated during the pass: when a dirty binding produces ticks (i.e. the
+simplifier actually changed something), all of its reverse-dependents are
+added to the dirty set. This propagates change notifications forward through
+the dependency graph within a single pass.
+
+For clean bindings we still check preInlineUnconditionally, since that's
+cheap (just inspects OccInfo) and necessary to set up the substitution
+correctly for subsequent bindings. We do NOT tick for clean pre-inline
+decisions — the decision is identical to the previous iteration.
+
+For clean bindings that are not pre-inlined, we emit them as-is (they were
+already simplified in a previous iteration) and add them to the in-scope set.
+-}
+
+simplTopBindsIncr :: SimplEnv
+                  -> IORef VarSet    -- ^ Mutable dirty set
+                  -> IdEnv VarSet    -- ^ Reverse dependency map
+                  -> [InBind]
+                  -> SimplM (SimplFloats, SimplEnv)
+-- See Note [Incremental simplification]
+simplTopBindsIncr env0 dirty_ref rev_deps binds0
+  = do  { !env1 <- simplRecBndrs env0 (bindersOfBinds binds0)
+        ; (floats, env2) <- simpl_binds env1 binds0
+        ; freeTick SimplifierDone
+        ; return (floats, env2) }
+  where
+    simpl_binds :: SimplEnv -> [InBind] -> SimplM (SimplFloats, SimplEnv)
+    simpl_binds env []           = return (emptyFloats env, env)
+    simpl_binds env (bind:binds) = do
+      dirty <- liftIO $ readIORef dirty_ref
+      let dominated = any (`elemVarSet` dirty) (bindersOf bind)
+      (float, env1) <- if dominated
+                        then simpl_bind_dirty env bind
+                        else simpl_bind_clean env bind
+      (floats, env2) <- simpl_binds env1 binds
+      let !floats1 = float `addFloats` floats
+      return (floats1, env2)
+
+    -- Dirty binding: full simplification, then propagate if it ticked
+    simpl_bind_dirty env bind = do
+      count_before <- simplCountN <$> getSimplCount
+      result@(_, _) <- simpl_bind_full env bind
+      count_after <- simplCountN <$> getSimplCount
+      when (count_after > count_before) $ liftIO $
+        -- This binding changed; mark its reverse-dependents dirty
+        modifyIORef' dirty_ref $ \d ->
+          foldl' (\s b -> case lookupVarEnv rev_deps b of
+                            Nothing   -> s
+                            Just deps -> s `unionVarSet` deps)
+                 d (bindersOf bind)
+      return result
+
+    -- Full simplification (same as simplTopBinds.simpl_bind)
+    simpl_bind_full env (Rec pairs)
+      = simplRecBind env (BC_Let TopLevel Recursive) pairs
+    simpl_bind_full env (NonRec b r)
+      = do { let bind_cxt = BC_Let TopLevel NonRecursive
+           ; (env', b') <- addBndrRules env b (lookupRecBndr env b) bind_cxt
+           ; simplRecOrTopPair env' bind_cxt b b' r }
+
+    -- Clean binding: skip expensive RHS simplification.
+    -- We bypass addBndrRules/lookupRecBndr because simplRecBndrs has
+    -- zapped the binder's IdInfo (unfolding, rules, etc.). For clean
+    -- bindings we want to preserve the full IdInfo from the previous
+    -- iteration, which is carried by the OccAnal binder 'b'.
+    simpl_bind_clean env (NonRec b rhs)
+      = case preInlineUnconditionally env TopLevel b rhs env of
+          Just env' ->
+            -- Same pre-inline decision as last time; extend subst, no tick
+            return (emptyFloats env, env')
+          Nothing ->
+            -- Emit the already-simplified binding as-is, using the
+            -- original binder (which preserves IdInfo from prev iteration).
+            -- We use modifyInScope to update the in-scope set with
+            -- the full binder info (overriding the zapped version from
+            -- simplRecBndrs).
+            let env' = modifyInScope env b
+            in return (mkFloatBind env' (NonRec b rhs))
+
+    simpl_bind_clean env (Rec pairs)
+      -- For clean Rec groups, emit as-is with full binder IdInfo
+      = let env' = foldl' (\e (b, _) -> modifyInScope e b) env pairs
+        in return (mkFloatBind env' (Rec pairs))
+
 
 {-
 ************************************************************************

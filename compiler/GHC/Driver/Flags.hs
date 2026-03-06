@@ -697,6 +697,11 @@ data GeneralFlag
    -- bad things get if you turn it off!
    | Opt_SimplPreInlining
 
+   -- | Use incremental (worklist-driven) simplification instead of
+   -- whole-program iteration. Avoids re-simplifying bindings that
+   -- haven't changed or whose dependencies haven't changed.
+   | Opt_IncrementalSimplifier
+
    -- Interface files
    | Opt_IgnoreInterfacePragmas
    | Opt_OmitInterfacePragmas
