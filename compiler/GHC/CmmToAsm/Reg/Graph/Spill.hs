@@ -29,8 +29,6 @@ import GHC.Utils.Outputable
 import GHC.Utils.Panic
 import GHC.Platform
 
-import Data.Function ( on )
-import Data.List (intersectBy, nubBy)
 import Data.Maybe
 import Data.IntSet              (IntSet)
 import qualified Data.IntSet    as IntSet
@@ -195,12 +193,13 @@ regSpill_instr platform regSlotMap (LiveInstr instr (Just _)) = do
 
   -- sometimes a register is listed as being read more than once,
   --      nub this so we don't end up inserting two lots of spill code.
-  let rsRead_             = nubBy ((==) `on` getUnique) rlRead
-      rsWritten_          = nubBy ((==) `on` getUnique) rlWritten
+  --  Use UniqSet for O(n) dedup instead of O(n²) nubBy.
+  let rsRead_             = nubByUniq rlRead
+      rsWritten_          = nubByUniq rlWritten
 
   -- if a reg is modified, it appears in both lists, want to undo this..
-  let rsModify            = intersectBy ((==) `on` getUnique) rsRead_ rsWritten_
-      modified            = mkUniqSet rsModify
+  let modified            = mkUniqSet rsRead_ `intersectUniqSets` mkUniqSet rsWritten_
+      rsModify            = filter (\r -> elementOfUniqSet r modified) rsRead_
       rsRead              = filter (\ r -> not $ elementOfUniqSet r modified) rsRead_
       rsWritten           = filter (\ r -> not $ elementOfUniqSet r modified) rsWritten_
 
@@ -393,3 +392,13 @@ instance Outputable SpillStats where
  ppr stats
         = pprUFM (spillStoreLoad stats)
                  (vcat . map (\(r, s, l) -> ppr r <+> int s <+> int l))
+
+-- | Remove duplicates from a list by Unique, preserving order of first occurrence.
+-- O(n) amortised instead of O(n²) nubBy.
+nubByUniq :: Uniquable a => [a] -> [a]
+nubByUniq = go emptyUniqSet
+  where
+    go _    []     = []
+    go seen (x:xs)
+      | elementOfUniqSet x seen = go seen xs
+      | otherwise               = x : go (addOneToUniqSet seen x) xs

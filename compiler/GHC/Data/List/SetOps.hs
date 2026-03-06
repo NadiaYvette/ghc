@@ -152,16 +152,14 @@ assocMaybe alist key
 ************************************************************************
 -}
 
-hasNoDups :: (Eq a) => [a] -> Bool
+hasNoDups :: (Ord a) => [a] -> Bool
 
-hasNoDups xs = f [] xs
+hasNoDups xs = f S.empty xs
   where
-    f _           []     = True
-    f seen_so_far (x:xs) = if x `is_elem` seen_so_far
-                           then False
-                           else f (x:seen_so_far) xs
-
-    is_elem = isIn "hasNoDups"
+    f _    []     = True
+    f seen (x:xs) = if x `S.member` seen
+                    then False
+                    else f (S.insert x seen) xs
 
 equivClasses :: (a -> a -> Ordering) -- Comparison
              -> [a]

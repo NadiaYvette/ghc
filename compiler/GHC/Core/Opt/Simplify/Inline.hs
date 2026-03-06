@@ -52,7 +52,7 @@ actual arguments.
 
 couldBeSmallEnoughToInline :: UnfoldingOpts -> Int -> CoreExpr -> Bool
 couldBeSmallEnoughToInline opts threshold rhs
-  = case sizeExpr opts threshold [] body of
+  = case sizeExpr opts threshold emptyVarSet body of
        TooBig -> False
        _      -> True
   where

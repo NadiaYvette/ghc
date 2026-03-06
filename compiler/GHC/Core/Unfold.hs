@@ -47,6 +47,7 @@ import GHC.Core.Predicate( isUnaryClass )
 import GHC.Types.Id
 import GHC.Types.Literal
 import GHC.Types.Id.Info
+import GHC.Types.Var.Set
 import GHC.Types.RepType ( isZeroBitTy )
 import GHC.Types.Basic  ( Arity, RecFlag )
 import GHC.Types.ForeignCall
@@ -347,7 +348,7 @@ calcUnfoldingGuidance opts is_top_bottoming is_join (Tick t expr)
   | not (tickishIsCode t)  -- non-code ticks don't matter for unfolding
   = calcUnfoldingGuidance opts is_top_bottoming is_join expr
 calcUnfoldingGuidance opts is_top_bottoming is_join expr
-  = case sizeExpr opts bOMB_OUT_SIZE val_bndrs body of
+  = case sizeExpr opts bOMB_OUT_SIZE (mkVarSet val_bndrs) body of
       TooBig -> UnfNever
       SizeIs size cased_bndrs scrut_discount
         | uncondInline is_join expr bndrs n_val_bndrs body size
@@ -506,7 +507,7 @@ uncondInline is_join rhs bndrs arity body size
 
 uncondInlineJoin :: [Var] -> CoreExpr -> Bool
 -- See Note [Duplicating join points] point (DJ3) in GHC.Core.Opt.Simplify.Iteration
-uncondInlineJoin bndrs body
+uncondInlineJoin bndrs0 body
 
   -- (DJ3)(a)
   | exprIsTrivial body
@@ -525,6 +526,7 @@ uncondInlineJoin bndrs body
     -- (DJ3)(c):
     -- - $j1 x y = K y x |> co  -- YES, inline!
     -- - $j2 x = K f x          -- No, don't! (because f is free)
+    bndrs = mkVarSet bndrs0
     indirectionOrAppWithoutFVs = go False body
 
     go !seen_fv (App f a)
@@ -534,7 +536,7 @@ uncondInlineJoin bndrs body
     go seen_fv (Var v)
       | isJoinId v        = True        -- Indirection to another join point; always inline
       | isDataConId v     = not seen_fv -- e.g. $j a b = K a b
-      | v `elem` bndrs    = not seen_fv -- e.g. $j a b = b a
+      | v `elemVarSet` bndrs = not seen_fv -- e.g. $j a b = b a
     go seen_fv (Cast e _) = go seen_fv e
     go seen_fv (Tick _ e) = go seen_fv e
     go _ _                = False
@@ -553,13 +555,13 @@ uncondInlineJoin bndrs body
       | otherwise        = Nothing
     go_arg (Cast e _)    = go_arg e
     go_arg (Tick _ e)    = go_arg e
-    go_arg (Var f)       = Just $! f `notElem` bndrs
+    go_arg (Var f)       = Just $! not (f `elemVarSet` bndrs)
     go_arg _             = Nothing
 
 
 sizeExpr :: UnfoldingOpts
          -> Int             -- Bomb out if it gets bigger than this
-         -> [Id]            -- Arguments; we're interested in which of these
+         -> VarSet          -- Arguments; we're interested in which of these
                             -- get case'd
          -> CoreExpr
          -> ExprSize
@@ -637,7 +639,7 @@ sizeExpr opts !bOMB_OUT_SIZE top_args expr
                                 foldr (addAltSize . size_up_alt) case_size alts
 
         where
-          is_top_arg (Var v) | v `elem` top_args = Just v
+          is_top_arg (Var v) | v `elemVarSet` top_args = Just v
           is_top_arg (Cast e _) = is_top_arg e
           is_top_arg (Tick _t e) = is_top_arg e
           is_top_arg _ = Nothing
@@ -777,7 +779,7 @@ litSize _other = 0    -- Must match size of nullary constructors
                       -- Key point: if  x |-> 4, then x must inline unconditionally
                       --            (eg via case binding)
 
-classOpSize :: UnfoldingOpts -> Class -> [Id] -> [CoreExpr] -> ExprSize
+classOpSize :: UnfoldingOpts -> Class -> VarSet -> [CoreExpr] -> ExprSize
 -- See (IA1) in Note [Interesting arguments] in GHC.Core.Opt.Simplify.Utils
 classOpSize opts cls top_args args
   | isUnaryClass cls
@@ -792,7 +794,7 @@ classOpSize opts cls top_args args
     -- If the class op is scrutinising a lambda bound dictionary then
     -- give it a discount, to encourage the inlining of this function
     -- The actual discount is rather arbitrarily chosen
-    arg_discount (Var dict) | dict `elem` top_args
+    arg_discount (Var dict) | dict `elemVarSet` top_args
                    = unitBag (dict, unfoldingDictDiscount opts)
     arg_discount _ = emptyBag
 
@@ -820,7 +822,7 @@ jumpSize _n_val_args _voids = 0   -- Jumps are small, and we don't want penalise
   -- spectral/puzzle. TODO Perhaps adjusting the default threshold would be a
   -- better solution?
 
-funSize :: UnfoldingOpts -> [Id] -> Id -> Int -> Int -> ExprSize
+funSize :: UnfoldingOpts -> VarSet -> Id -> Int -> Int -> ExprSize
 -- Size for function calls where the function is not a constructor or primops
 -- Note [Function applications]
 funSize opts top_args fun n_val_args voids
@@ -835,7 +837,7 @@ funSize opts top_args fun n_val_args voids
 
         --                  DISCOUNTS
         --  See Note [Function and non-function discounts]
-    arg_discount | some_val_args && fun `elem` top_args
+    arg_discount | some_val_args && fun `elemVarSet` top_args
                  = unitBag (fun, unfoldingFunAppDiscount opts)
                  | otherwise = emptyBag
         -- If the function is an argument and is applied

@@ -231,15 +231,17 @@ exitifyRec in_scope pairs
            ; return $ mkVarApps (Var v) abs_vars }
 
       where
+        captured_set = mkVarSet captured
+
         -- Used to detect exit expressions that are already proper exit jumps
-        isCapturedVarArg (Var v) = v `elem` captured
+        isCapturedVarArg (Var v) = v `elemVarSet` captured_set
         isCapturedVarArg _ = False
 
         -- An interesting exit expression has free, non-imported
         -- variables from outside the recursive group
         -- See Note [Interesting expression]
         is_interesting = anyVarSet isLocalId $
-                         fvs `minusVarSet` mkVarSet captured
+                         fvs `minusVarSet` captured_set
 
         -- The arguments of this exit join point
         -- See Note [Picking arguments to abstract over]
