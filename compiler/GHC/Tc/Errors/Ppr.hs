@@ -5575,7 +5575,7 @@ suggestAddSig ctxt ty1 _ty2
     -- ic_given_eqs /= NoGivenEqs (i.e. a GADT match)
     find [] _ _ = []
     find (implic:implics) seen_eqs tv
-       | tv `elem` ic_skols implic
+       | tv `elemVarSet` mkVarSet (ic_skols implic)
        , InferSkol prs <- ic_info implic
        , seen_eqs
        = map fst prs

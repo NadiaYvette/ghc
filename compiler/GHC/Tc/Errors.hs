@@ -2034,7 +2034,7 @@ mkTyVarEqErr' ctxt item tv1 ty2
   -- that there's no occurs-check or forall problem
   | (implic:_) <- cec_encl ctxt
   , Implic { ic_skols = skols } <- implic
-  , tv1 `elem` skols
+  , tv1 `elemVarSet` mkVarSet skols
   = do
     tv_extra <- extraTyVarEqInfo (tv1, Nothing) ty2
     let msg = Mismatch
