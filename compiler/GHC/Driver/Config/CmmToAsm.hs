@@ -27,6 +27,7 @@ initNCGConfig dflags this_mod = NCGConfig
    , ncgSplitSections         = gopt Opt_SplitSections dflags
    , ncgRegsIterative         = gopt Opt_RegsIterative dflags
    , ncgRegsGraph             = gopt Opt_RegsGraph dflags
+   , ncgRegsSSA               = gopt Opt_RegsSSA dflags
    , ncgAsmLinting            = gopt Opt_DoAsmLinting dflags
    , ncgCfgWeights            = cfgWeights dflags
    , ncgCfgBlockLayout        = gopt Opt_CfgBlocklayout dflags

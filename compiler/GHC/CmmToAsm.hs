@@ -72,6 +72,7 @@ import qualified GHC.CmmToAsm.LA64 as LA64
 
 import GHC.CmmToAsm.Reg.Liveness
 import qualified GHC.CmmToAsm.Reg.Linear                as Linear
+import qualified GHC.CmmToAsm.Reg.SSA                   as SSA
 
 import qualified GHC.Data.Graph.Color                   as Color
 import qualified GHC.CmmToAsm.Reg.Graph                 as Color
@@ -501,7 +502,47 @@ cmmNativeGen logger ncgImpl us fileIds dbgMap cmm count
 
         -- allocate registers
         (alloced, usAlloc, ppr_raStatsColor, ppr_raStatsLinear, raStats, stack_updt_blks) <-
-         if ( ncgRegsGraph config || ncgRegsIterative config )
+         if ncgRegsSSA config
+          then do
+                -- the regs usable for allocation
+                let alloc_regs :: UniqFM RegClass (UniqSet RealReg)
+                        = foldr (\r -> plusUFM_C unionUniqSets
+                                        $ unitUFM (targetClassOfRealReg platform r) (unitUniqSet r))
+                                emptyUFM
+                        $ allocatableRegs ncgImpl
+
+                -- do the SSA register allocation
+                let ((alloced, maybe_more_stack, _regAllocStats), usAlloc)
+                        = {-# SCC "RegAlloc-ssa" #-}
+                          runUniqueDSM usLive
+                          $ SSA.regAlloc
+                                config
+                                alloc_regs
+                                (mkUniqSet [0 .. maxSpillSlots ncgImpl])
+                                (maxSpillSlots ncgImpl)
+                                withLiveness
+                                livenessCfg
+
+                let ((alloced', stack_updt_blks), usAlloc')
+                        = runUniqueDSM usAlloc $
+                            case maybe_more_stack of
+                            Nothing     -> return (alloced, [])
+                            Just amount -> do
+                                (alloced',stack_updt_blks) <- unzip <$>
+                                            (mapM ((ncgAllocMoreStack ncgImpl) amount) alloced)
+                                return (alloced', concat stack_updt_blks )
+
+                putDumpFileMaybe logger
+                        Opt_D_dump_asm_regalloc "Registers allocated"
+                        FormatCMM
+                        (vcat $ map (pprNatCmmDeclS ncgImpl) alloced)
+
+                return  ( alloced', usAlloc'
+                        , Nothing
+                        , Nothing
+                        , [], stack_updt_blks)
+
+         else if ( ncgRegsGraph config || ncgRegsIterative config )
           then do
                 -- the regs usable for allocation
                 let alloc_regs :: UniqFM RegClass (UniqSet RealReg)

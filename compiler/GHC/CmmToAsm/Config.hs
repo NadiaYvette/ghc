@@ -27,6 +27,7 @@ data NCGConfig = NCGConfig
    , ncgSplitSections         :: !Bool            -- ^ Split sections
    , ncgRegsIterative         :: !Bool
    , ncgRegsGraph             :: !Bool
+   , ncgRegsSSA               :: !Bool
    , ncgAsmLinting            :: !Bool            -- ^ Perform ASM linting pass
    , ncgDoConstantFolding     :: !Bool            -- ^ Perform CMM constant folding
    , ncgSseAvxVersion         :: Maybe SseAvxVersion -- ^ (x86) SSE and AVX instructions

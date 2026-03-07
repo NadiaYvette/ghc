@@ -2604,6 +2604,7 @@ fFlagsDeps = [
   flagSpec "prof-late-inline"                 Opt_ProfLateInlineCcs,
   flagSpec "regs-graph"                       Opt_RegsGraph,
   flagSpec "regs-iterative"                   Opt_RegsIterative,
+  flagSpec "regs-ssa"                         Opt_RegsSSA,
   depFlagSpec' "rewrite-rules"                Opt_EnableRewriteRules
    (useInstead "-f" "enable-rewrite-rules"),
   flagSpec "shared-implib"                    Opt_SharedImplib,

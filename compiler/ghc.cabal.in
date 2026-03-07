@@ -298,6 +298,7 @@ Library
         GHC.CmmToAsm.Reg.Graph.Stats
         GHC.CmmToAsm.Reg.Graph.TrivColorable
         GHC.CmmToAsm.Reg.Graph.X86
+        GHC.CmmToAsm.Reg.SSA
         GHC.CmmToAsm.Reg.Linear
         GHC.CmmToAsm.Reg.Linear.AArch64
         GHC.CmmToAsm.Reg.Linear.Base

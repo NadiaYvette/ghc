@@ -660,6 +660,7 @@ data GeneralFlag
    | Opt_EnableThSpliceWarnings         -- ^ Enable warnings for TH splices
    | Opt_RegsGraph                      -- ^ Do graph coloring register allocation
    | Opt_RegsIterative                  -- ^ Do iterative coalescing graph coloring register allocation
+   | Opt_RegsSSA                        -- ^ Do SSA-based register allocation
    | Opt_PedanticBottoms                -- ^ Be picky about how we treat bottom
    | Opt_LlvmFillUndefWithGarbage       -- Testing for undef bugs (hidden flag)
    | Opt_IrrefutableTuples
@@ -931,6 +932,7 @@ optimisationFlags = EnumSet.fromList
    , Opt_EnableRewriteRules
    , Opt_RegsGraph
    , Opt_RegsIterative
+   , Opt_RegsSSA
    , Opt_IrrefutableTuples
    , Opt_CmmSink
    , Opt_CmmElimCommonBlocks
