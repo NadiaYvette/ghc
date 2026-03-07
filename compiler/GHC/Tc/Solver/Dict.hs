@@ -769,7 +769,7 @@ try_inert_dicts inerts dict_w@(DictCt { di_ev = ev_w, di_cls = cls, di_tys = tys
                                  ; return $ Stop ev_w (text "Dict equal" <+> ppr dict_w) }
                  KeepWork  -> do { traceTcS "lookupInertDict:KeepWork" (ppr dict_w)
                                  ; setDictIfWanted ev_i EvCanonical (ctEvTerm ev_w)
-                                 ; updInertCans (updDicts $ delDict dict_w)
+                                 ; updInertCans (delDictFromCans dict_w)
                                  ; continueWith () } }
 
   | otherwise
@@ -1107,7 +1107,10 @@ matchLocalInst :: TcPredType -> CtLoc -> TcS ClsInstResult
 matchLocalInst body_pred loc
   = do { -- Look in the inert set for a matching Given quantified constraint
          inerts@(IS { inert_cans = ics }) <- getInertSet
-       ; case match_local_inst inerts (inert_qcis ics) of
+       ; let qcis = case getClassPredTys_maybe body_pred of
+                      Just (cls, _) -> lookupQCInstsByClass cls (inert_qcis ics)
+                      Nothing       -> allQCInsts (inert_qcis ics)
+       ; case match_local_inst inerts qcis of
             { ([], []) -> do { traceTcS "No local instance for" (ppr body_pred)
                              ; return NoInstance }
             ; (matches, unifs) ->

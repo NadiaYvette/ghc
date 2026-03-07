@@ -34,6 +34,7 @@ import GHC.Core.Predicate
 import GHC.Core.Reduction
 import GHC.Core.Coercion
 import GHC.Core.Class( classHasSCs )
+import GHC.Core.TyCo.FVs( anyFreeVarsOfType )
 
 import GHC.Types.Id(  idType )
 import GHC.Types.Var( EvVar, tyVarKind )
@@ -54,7 +55,7 @@ import GHC.Driver.Session
 
 import Control.Monad
 
-import Data.List( deleteFirstsBy )
+import Data.List( deleteFirstsBy, partition )
 import qualified Data.Semigroup as S
 import Data.Void( Void )
 
@@ -356,6 +357,29 @@ This also applies for quantified constraints; see `-fqcs-fuel` compiler flag and
 *                                                                                 *
 ******************************************************************************** -}
 
+{- Note [Implication solving order]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When solving a collection of sibling implications, the order matters because
+solving one implication may unify metavariables that appear in others.  For
+example, if implication A unifies `alpha := Int` and implication B has a
+wanted constraint `C alpha`, then solving A before B lets B work with `C Int`
+instead of `C alpha`, potentially allowing it to be solved in fewer iterations
+of the outer solveWanteds loop.
+
+`solveImplicsReordered` processes implications one at a time, using
+`reportFineGrainUnifications` to track which metavariables were unified.
+When unifications occur, it moves remaining implications that syntactically
+mention the unified variables to the front of the queue (see
+`prioritizeByUnifs`).
+
+The check in `implicMentionsVars` is deliberately syntactic (on unzonked
+types): a constraint that still contains `alpha` in its type is exactly one
+that would benefit from `alpha` having been unified.  The check is also
+shallow — it only inspects `wc_simple`, not nested implications — because
+the simple wanteds are the constraints most directly affected by a
+unification.
+-}
+
 solveNestedImplications :: Bag Implication
                         -> TcS (Bag Implication)
 -- Precondition: the TcS inerts may contain unsolved simples which have
@@ -365,7 +389,8 @@ solveNestedImplications implics
   = return emptyBag
   | otherwise
   = do { traceTcS "solveNestedImplications starting {" empty
-       ; unsolved_implics <- mapBagM solveImplication implics
+         -- See Note [Implication solving order]
+       ; unsolved_implics <- solveImplicsReordered (bagToList implics)
 
        -- ... and we are back in the original TcS inerts
        -- Notice that the original includes the _insoluble_simples so it was safe to ignore
@@ -374,6 +399,34 @@ solveNestedImplications implics
                   vcat [ text "unsolved_implics =" <+> ppr unsolved_implics ]
 
        ; return unsolved_implics }
+
+-- | Solve implications one at a time, reordering the remaining ones
+-- when unifications occur.  See Note [Implication solving order].
+solveImplicsReordered :: [Implication] -> TcS (Bag Implication)
+solveImplicsReordered [] = return emptyBag
+solveImplicsReordered (imp : rest) = do
+    (unif_tvs, solved_imp) <- reportFineGrainUnifications (solveImplication imp)
+    let rest' | isEmptyVarSet unif_tvs = rest
+              | otherwise = prioritizeByUnifs unif_tvs rest
+    solved_rest <- solveImplicsReordered rest'
+    return (consBag solved_imp solved_rest)
+
+-- | Move implications that mention any of the unified variables to the front,
+-- so they benefit from the newly-available type information.
+prioritizeByUnifs :: TcTyVarSet -> [Implication] -> [Implication]
+prioritizeByUnifs unif_tvs implics = benefiting ++ others
+  where
+    (benefiting, others) = partition (implicMentionsVars unif_tvs) implics
+
+-- | Quick syntactic check: does this implication's simple wanted constraints
+-- mention any of the given type variables?  Works on unzonked types, which is
+-- exactly right — we want to find constraints that still reference the
+-- (now-unified) metavariable syntactically.
+implicMentionsVars :: TcTyVarSet -> Implication -> Bool
+implicMentionsVars tvs (Implic { ic_wanted = WC { wc_simple = simples } })
+  = anyBag ct_mentions simples
+  where
+    ct_mentions ct = anyFreeVarsOfType (`elemVarSet` tvs) (ctPred ct)
 
 solveImplication :: Implication     -- Wanted
                  -> TcS Implication -- Simplified implication
@@ -1594,7 +1647,7 @@ tryInertQCs :: QCInst -> SolverStage ()
 tryInertQCs qc
   = Stage $
     do { inerts <- getInertCans
-       ; try_inert_qcs qc (inert_qcis inerts) }
+       ; try_inert_qcs qc (allQCInsts (inert_qcis inerts)) }
 
 try_inert_qcs :: QCInst -> [QCInst] -> TcS (StopOrContinue ())
 try_inert_qcs (QCI { qci_ev = ev_w }) inerts =

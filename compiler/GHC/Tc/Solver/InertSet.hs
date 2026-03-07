@@ -28,10 +28,17 @@ module GHC.Tc.Solver.InertSet (
     -- * Inert Dicts
     updDicts, delDict, addDict, filterDicts, partitionDicts,
     addSolvedDict, lookupSolvedDict, lookupInertDict,
+    addDictToCans, delDictFromCans, rebuildDictDeps,
 
     -- * Inert Irreds
     InertIrreds, delIrred, addIrreds, addIrred, foldIrreds,
     findMatchingIrreds, updIrreds, addIrredToCans,
+
+    -- * Quantified constraint index
+    QCInstIndex,
+    emptyQCInstIndex, addQCInst, nullQCInstIndex,
+    allQCInsts, lookupQCInstsByClass,
+    partitionQCInsts, mapAccumLQCInsts,
 
     -- * Kick-out
     KickOutSpec(..), kickOutRewritableLHS,
@@ -59,20 +66,24 @@ import GHC.Types.Var
 import GHC.Types.Var.Env
 import GHC.Types.Var.Set
 import GHC.Types.Unique( hasKey )
+import GHC.Types.Unique.FM
 import GHC.Types.Basic( SwapFlag(..) )
 
 import GHC.Core.Reduction
 import GHC.Core.Predicate
+import GHC.Core.TyCo.FVs ( anyFreeVarsOfTypes, tyCoVarsOfTypes )
 import qualified GHC.Core.TyCo.Rep as Rep
 import GHC.Core.TyCon
 import GHC.Core.Class( Class, classTyCon )
 import GHC.Builtin.Names( eqPrimTyConKey, heqTyConKey, eqTyConKey, coercibleTyConKey )
 import GHC.Utils.Misc       ( partitionWith )
+import GHC.Data.Maybe       ( orElse )
 import GHC.Utils.Outputable
 import GHC.Utils.Panic
 import GHC.Data.Bag
 
 import Control.Monad      ( forM_ )
+import Data.List          ( mapAccumL, foldl' )
 import qualified Data.List.NonEmpty as NE
 import Data.Function      ( on )
 
@@ -370,7 +381,8 @@ emptyInertCans given_eq_lvl
        , inert_given_eq_lvl = given_eq_lvl
        , inert_given_eqs    = False
        , inert_dicts        = emptyDictMap
-       , inert_qcis         = []
+       , inert_dict_fvs     = emptyDictDeps
+       , inert_qcis         = emptyQCInstIndex
        , inert_irreds       = emptyBag }
 
 emptyInertSet :: TcLevel -> InertSet
@@ -1267,8 +1279,14 @@ data InertCans   -- See Note [Detailed InertCans Invariants] for more
               -- All fully rewritten (modulo flavour constraints)
               --     wrt inert_eqs
 
-       , inert_qcis :: [QCInst] -- See Note [Quantified constraints]
-                                -- in GHC.Tc.Solver.Solve
+       , inert_qcis :: QCInstIndex -- See Note [Quantified constraints]
+                                  -- in GHC.Tc.Solver.Solve
+                                  -- See Note [Indexed quantified constraints]
+
+       , inert_dict_fvs :: !DictDeps
+              -- Reverse dependency index: maps each type variable
+              -- to the dict constraints that mention it.
+              -- See Note [Incremental kick-out via dependency index]
 
        , inert_irreds :: InertIrreds
               -- Irreducible predicates that cannot be made canonical,
@@ -1313,8 +1331,8 @@ instance Outputable InertCans where
         text "Dictionaries =" <+> pprBag (dictsToBag dicts)
       , ppUnless (isEmptyBag irreds) $
         text "Irreds =" <+> pprBag irreds
-      , ppUnless (null insts) $
-        text "Given instances =" <+> vcat (map ppr insts)
+      , ppUnless (nullQCInstIndex insts) $
+        text "Given instances =" <+> ppr insts
       , text "Innermost given equalities =" <+> ppr ge_lvl
       , text "Given eqs at this level =" <+> ppr given_eqs
       ]
@@ -1494,6 +1512,184 @@ partitionDicts f m = foldTcAppMap k m (emptyBag, emptyDictMap)
 
 {- *********************************************************************
 *                                                                      *
+           Dictionary dependency index
+*                                                                      *
+********************************************************************* -}
+
+{- Note [Incremental kick-out via dependency index]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The constraint solver's kick-out mechanism (kickOutRewritableLHS) must find
+all inert constraints that mention a given type variable, so they can be
+reprocessed after that variable is unified or rewritten.
+
+Previously, this required scanning ALL dictionary constraints in the inert set
+(via partitionDicts), checking each one with anyRewritableTyVar. For programs
+with many constraints, this O(n) scan dominated kick-out cost.
+
+The DictDeps reverse index maps each free type variable to the dictionary
+constraints that mention it. During kick-out for type variable unifications
+(KOAfterUnify) or type variable equality additions (KOAfterAdding TyVarLHS),
+we look up the target variable(s) in the index to get O(1) candidate
+retrieval instead of O(n) scanning.
+
+The index is maintained incrementally:
+  * addDictToCans computes FVs of di_tys and adds the dict to each
+    variable's entry
+  * delDictFromCans removes the dict from each variable's entry
+  * kickOutRewritableLHS uses the index for variable-based cases and
+    falls back to full scan for type family cases (KOAfterAdding TyFamLHS)
+
+The index uses tyCoVarsOfTypes for FV computation. This is a superset of
+what anyRewritableTyVar finds (which is role-aware), so the index may return
+false-positive candidates. These are filtered by the full kick-out criteria.
+For the common case of nominal equalities (which is what dict kick-out uses),
+the sets are identical.
+
+Memory: DictCt values are shared (not copied) between inert_dicts and
+inert_dict_fvs, so the overhead is just the DVarEnv/UniqFM structure.
+-}
+
+-- | Reverse dependency index mapping type variables to dict constraints.
+-- See Note [Incremental kick-out via dependency index]
+type DictDeps = DVarEnv (UniqFM EvVar DictCt)
+
+emptyDictDeps :: DictDeps
+emptyDictDeps = emptyDVarEnv
+
+addDictDep :: DictCt -> DictDeps -> DictDeps
+addDictDep dict deps = nonDetStrictFoldVarSet add deps fvs
+  where
+    fvs   = tyCoVarsOfTypes (di_tys dict)
+    ev_id = ctEvEvId (di_ev dict)
+    add tv dm = extendDVarEnv dm tv updated
+      where old     = lookupDVarEnv dm tv `orElse` emptyUFM
+            updated = addToUFM old ev_id dict
+
+removeDictDep :: DictCt -> DictDeps -> DictDeps
+removeDictDep dict deps = nonDetStrictFoldVarSet remove deps fvs
+  where
+    fvs   = tyCoVarsOfTypes (di_tys dict)
+    ev_id = ctEvEvId (di_ev dict)
+    remove tv dm = case lookupDVarEnv dm tv of
+      Nothing    -> dm
+      Just entry -> let entry' = delFromUFM entry ev_id
+                    in if isNullUFM entry'
+                       then delDVarEnv dm tv
+                       else extendDVarEnv dm tv entry'
+
+removeDictsDep :: [DictCt] -> DictDeps -> DictDeps
+removeDictsDep dicts deps = foldl' (flip removeDictDep) deps dicts
+
+-- | Look up all dict constraints mentioning a single type variable.
+lookupDictDepsByVar :: TcTyVar -> DictDeps -> [DictCt]
+lookupDictDepsByVar tv deps = case lookupDVarEnv deps tv of
+  Nothing    -> []
+  Just entry -> nonDetEltsUFM entry
+
+-- | Look up all dict constraints mentioning any variable in the set.
+-- Returns a deduplicated list (each dict appears once even if it
+-- mentions multiple target variables).
+lookupDictDepsByVars :: TcTyVarSet -> DictDeps -> UniqFM EvVar DictCt
+lookupDictDepsByVars tvs deps = nonDetStrictFoldVarSet combine emptyUFM tvs
+  where
+    combine tv acc = case lookupDVarEnv deps tv of
+      Nothing    -> acc
+      Just entry -> plusUFM acc entry  -- UniqFM union deduplicates by key
+
+-- | Add a dict to both inert_dicts and inert_dict_fvs.
+addDictToCans :: DictCt -> InertCans -> InertCans
+addDictToCans dict ics = ics { inert_dicts    = addDict dict (inert_dicts ics)
+                             , inert_dict_fvs = addDictDep dict (inert_dict_fvs ics) }
+
+-- | Remove a dict from both inert_dicts and inert_dict_fvs.
+delDictFromCans :: DictCt -> InertCans -> InertCans
+delDictFromCans dict ics = ics { inert_dicts    = delDict dict (inert_dicts ics)
+                               , inert_dict_fvs = removeDictDep dict (inert_dict_fvs ics) }
+
+-- | Rebuild the dependency index from a DictMap.
+-- Used after operations that filter the DictMap wholesale (e.g. deleteGivenIPs).
+rebuildDictDeps :: DictMap DictCt -> DictDeps
+rebuildDictDeps dm = foldTcAppMap addDictDep dm emptyDictDeps
+
+
+{- *********************************************************************
+*                                                                      *
+           Quantified constraint index
+*                                                                      *
+********************************************************************* -}
+
+-- | Index for quantified constraints (QCInst), indexed by the class
+-- TyCon of the constraint body for efficient lookup.
+-- See Note [Indexed quantified constraints]
+data QCInstIndex = QCInstIndex
+  { qci_by_cls :: !(UniqFM TyCon [QCInst])
+    -- ^ QCInsts indexed by the class TyCon of qci_body
+  , qci_other  :: ![QCInst]
+    -- ^ QCInsts whose body is not a class pred (rare)
+  }
+
+emptyQCInstIndex :: QCInstIndex
+emptyQCInstIndex = QCInstIndex emptyUFM []
+
+nullQCInstIndex :: QCInstIndex -> Bool
+nullQCInstIndex (QCInstIndex by_cls other)
+  = isNullUFM by_cls && null other
+
+addQCInst :: QCInst -> QCInstIndex -> QCInstIndex
+addQCInst qci idx
+  | Just (cls, _) <- getClassPredTys_maybe (qci_body qci)
+  = idx { qci_by_cls = addToUFM_C (++) (qci_by_cls idx) (classTyCon cls) [qci] }
+  | otherwise
+  = idx { qci_other = qci : qci_other idx }
+
+-- | All QCInsts, as a flat list (for kick-out, superclass expansion, etc.)
+allQCInsts :: QCInstIndex -> [QCInst]
+allQCInsts (QCInstIndex by_cls other)
+  = concatMap snd (nonDetUFMToList by_cls) ++ other
+
+-- | Look up QCInsts relevant for matching a given class.
+-- Returns QCInsts with matching class head plus non-class QCInsts.
+lookupQCInstsByClass :: Class -> QCInstIndex -> [QCInst]
+lookupQCInstsByClass cls (QCInstIndex by_cls other)
+  = case lookupUFM by_cls (classTyCon cls) of
+      Nothing   -> other
+      Just qcis -> qcis ++ other
+
+-- | Partition QCInsts, keeping the index structure.
+partitionQCInsts :: (QCInst -> Either a QCInst) -> QCInstIndex -> ([a], QCInstIndex)
+partitionQCInsts f idx =
+  let all_qcis = allQCInsts idx
+      (outs, kept) = partitionWith f all_qcis
+  in (outs, foldl' (flip addQCInst) emptyQCInstIndex kept)
+
+-- | mapAccumL over all QCInsts (for superclass expansion)
+mapAccumLQCInsts :: (a -> QCInst -> (a, QCInst)) -> a -> QCInstIndex -> (a, QCInstIndex)
+mapAccumLQCInsts f z idx =
+  let (z', qcis') = mapAccumL f z (allQCInsts idx)
+  in (z', foldl' (flip addQCInst) emptyQCInstIndex qcis')
+
+instance Outputable QCInstIndex where
+  ppr idx = vcat (map ppr (allQCInsts idx))
+
+{- Note [Indexed quantified constraints]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Quantified constraints (QCInsts) are indexed by the class TyCon of their
+body predicate. This allows match_local_inst to look up only QCInsts with
+matching class heads, avoiding a linear scan of all QCInsts.
+
+When matching body_pred against QCInsts:
+- If body_pred is a class pred (C tys), we only need to check QCInsts
+  whose body is also a C pred, plus any non-class QCInsts.
+- A QCInst with body (D tys') where D /= C cannot match body_pred,
+  because class TyCons are generative (distinct classes never unify).
+- Non-class QCInsts (rare) are stored in qci_other and always checked.
+
+This is analogous to how DictMap indexes dict constraints by class TyCon.
+-}
+
+
+{- *********************************************************************
+*                                                                      *
                    Inert Irreds
 *                                                                      *
 ********************************************************************* -}
@@ -1633,18 +1829,20 @@ data WhereToLook = LookEverywhere | LookOnlyUnderFamApps
 kickOutRewritableLHS :: KickOutSpec -> CtFlavourRole -> InertCans -> (Cts, InertCans)
 -- See Note [kickOutRewritable]
 kickOutRewritableLHS ko_spec new_fr@(_, new_role)
-                     ics@(IC { inert_eqs     = tv_eqs
-                             , inert_dicts   = dictmap
-                             , inert_funeqs  = funeqmap
-                             , inert_irreds  = irreds
-                             , inert_qcis    = old_insts })
+                     ics@(IC { inert_eqs      = tv_eqs
+                             , inert_dicts    = dictmap
+                             , inert_dict_fvs = dict_deps
+                             , inert_funeqs   = funeqmap
+                             , inert_irreds   = irreds
+                             , inert_qcis     = old_insts })
   = (kicked_out, inert_cans_in)
   where
-    inert_cans_in = ics { inert_eqs     = tv_eqs_in
-                        , inert_dicts   = dicts_in
-                        , inert_funeqs  = feqs_in
-                        , inert_irreds  = irs_in
-                        , inert_qcis    = insts_in }
+    inert_cans_in = ics { inert_eqs      = tv_eqs_in
+                        , inert_dicts    = dicts_in
+                        , inert_dict_fvs = dict_deps_in
+                        , inert_funeqs   = feqs_in
+                        , inert_irreds   = irs_in
+                        , inert_qcis     = insts_in }
 
     kicked_out :: Cts
     kicked_out = (fmap CDictCan dicts_out `andCts` fmap CIrredCan irs_out)
@@ -1654,7 +1852,11 @@ kickOutRewritableLHS ko_spec new_fr@(_, new_role)
 
     (tv_eqs_out, tv_eqs_in) = partitionInertEqs kick_out_eq tv_eqs
     (feqs_out,   feqs_in)   = partitionFunEqs   kick_out_eq funeqmap
-    (dicts_out,  dicts_in)  = partitionDicts    kick_out_dict dictmap
+
+    -- Dict kick-out: use dependency index for variable-based cases
+    -- See Note [Incremental kick-out via dependency index]
+    (dicts_out, dicts_in, dict_deps_in) = kickOutDicts ko_spec
+
     (irs_out,    irs_in)    = partitionBag      kick_out_irred irreds
       -- Kick out even insolubles: See Note [Rewrite insolubles]
       -- Of course we must kick out irreducibles like (c a), in case
@@ -1663,10 +1865,10 @@ kickOutRewritableLHS ko_spec new_fr@(_, new_role)
     -- Kick-out for inert instances
     -- See Note [Quantified constraints] in GHC.Tc.Solver.Solve
     insts_out :: [Ct]
-    insts_in  :: [QCInst]
+    insts_in  :: QCInstIndex
     (insts_out, insts_in)
        | fr_may_rewrite (Given, NomEq)  -- All the insts are Givens
-       = partitionWith kick_out_qci old_insts
+       = partitionQCInsts kick_out_qci old_insts
        | otherwise
        = ([], old_insts)
     kick_out_qci qci
@@ -1709,10 +1911,44 @@ kickOutRewritableLHS ko_spec new_fr@(_, new_role)
     fr_may_rewrite fs = new_fr `eqCanRewriteFR` fs
         -- Can the new item rewrite the inert item?
 
-    kick_out_dict :: DictCt -> Bool
+    -- Incremental dict kick-out using the dependency index.
+    -- For variable-based cases (KOAfterUnify, KOAfterAdding TyVarLHS),
+    -- look up candidates from the dep index instead of scanning all dicts.
+    -- For TyFamLHS, fall back to full scan.
+    -- See Note [Incremental kick-out via dependency index]
+    kickOutDicts :: KickOutSpec -> (Bag DictCt, DictMap DictCt, DictDeps)
+    kickOutDicts (KOAfterUnify tvs) = kickOutDictsVars tvs
+    kickOutDicts (KOAfterAdding (TyVarLHS tv)) = kickOutDictsVars (unitVarSet tv)
+    kickOutDicts (KOAfterAdding (TyFamLHS {})) =
+      -- Can't use dep index for type family LHS; fall back to full scan
+      let (out, dm_in) = partitionDicts kick_out_dict_full dictmap
+          deps_in = rebuildDictDeps dm_in
+      in (out, dm_in, deps_in)
+
+    -- Use dep index to find candidates for variable-based kick-out
+    kickOutDictsVars :: TcTyVarSet -> (Bag DictCt, DictMap DictCt, DictDeps)
+    kickOutDictsVars target_tvs =
+      let -- Look up candidates from the dep index
+          candidates = lookupDictDepsByVars target_tvs dict_deps
+          -- Partition candidates into kicked and kept
+          (kicked_list, _kept_list) =
+            partitionUFM kick_out_dict_full candidates
+          -- Remove kicked dicts from the DictMap
+          dm_in = foldl' (\dm d -> delDict d dm) dictmap kicked_list
+          -- Remove kicked dicts from the dep index
+          deps_in = removeDictsDep kicked_list dict_deps
+      in (listToBag kicked_list, dm_in, deps_in)
+
+    -- Partition a UniqFM into (matching, non-matching) lists
+    partitionUFM :: (a -> Bool) -> UniqFM key a -> ([a], [a])
+    partitionUFM p m = foldl' go ([], []) (nonDetEltsUFM m)
+      where go (yes, no) x | p x       = (x:yes, no)
+                            | otherwise = (yes, x:no)
+
+    kick_out_dict_full :: DictCt -> Bool
     -- Kick it out if the new CEqCan can rewrite the inert one
     -- See Note [kickOutRewritable]
-    kick_out_dict (DictCt { di_tys = tys, di_ev = ev })
+    kick_out_dict_full (DictCt { di_tys = tys, di_ev = ev })
       =  fr_may_rewrite (ctEvFlavour ev, NomEq)
       && any (fr_can_rewrite_ty LookEverywhere NomEq) tys
 
@@ -1808,6 +2044,23 @@ kickOutRewritableLHS ko_spec new_fr@(_, new_role)
         go (Rep.FunTy {})         = False
         go (Rep.CoercionTy {})    = False
 
+{- Note [Kick-out pre-filter]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In kick_out_dict, before doing the expensive anyRewritableTyVar traversal
+(which checks role compatibility, positions under family applications, etc.),
+we first do a quick free-variable check via anyFreeVarsOfTypes to see if the
+target variable(s) appear at all in the dict's type arguments.
+
+For KOAfterUnify tvs: check if any variable in tvs is free in the dict types.
+For KOAfterAdding (TyVarLHS tv): check if tv is free in the dict types.
+For KOAfterAdding (TyFamLHS ..): no pre-filter (type family heads can appear
+  in complex positions).
+
+This pre-filter exits early as soon as it finds (or rules out) the variable,
+avoiding the more complex role-aware traversal in the common case where the
+constraint doesn't mention the variable at all.
+-}
+
 {- Note [kickOutRewritable]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 See also Note [inert_eqs: the inert equalities].
@@ -1892,7 +2145,7 @@ noGivenNewtypeReprEqs :: TyCon -> InertSet -> Bool
 -- See Note [Decomposing newtype equalities] (EX3) in GHC.Tc.Solver.Equality
 noGivenNewtypeReprEqs tc (IS { inert_cans = inerts })
   | IC { inert_irreds = irreds, inert_qcis = quant_cts } <- inerts
-  = not (anyBag might_help_irred irreds || any might_help_qc quant_cts)
+  = not (anyBag might_help_irred irreds || any might_help_qc (allQCInsts quant_cts))
     -- Look in both inert_irreds /and/ inert_qcis (#26020)
   where
     might_help_irred (IrredCt { ir_ev = ev })

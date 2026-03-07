@@ -345,13 +345,13 @@ addInertQCI new_qci
     add_qci :: InertCans -> TcS InertCans
     -- See Note [Do not add duplicate quantified instances]
     add_qci ics@(IC { inert_qcis = qcis })
-      | any same_qci qcis
+      | any same_qci (allQCInsts qcis)
       = do { traceTcS "skipping duplicate quantified instance" (ppr new_qci)
            ; return ics }
 
       | otherwise
       = do { traceTcS "adding new inert quantified instance" (ppr new_qci)
-           ; return (ics { inert_qcis = new_qci : qcis }) }
+           ; return (ics { inert_qcis = addQCInst new_qci qcis }) }
 
     same_qci old_qci = tcEqType (ctEvPred (qci_ev old_qci))
                                 (ctEvPred (qci_ev new_qci))
@@ -381,7 +381,7 @@ updInertDicts dict_ct
        ; deleteGivenIPs dict_ct
 
        -- Add the new constraint to the inert set
-       ; updInertCans (updDicts (addDict dict_ct)) }
+       ; updInertCans (addDictToCans dict_ct) }
 
 deleteGivenIPs :: DictCt -> TcS ()
 -- Special magic when adding a Given implicit parameter to the inert set
@@ -392,8 +392,11 @@ deleteGivenIPs (DictCt { di_cls = cls, di_ev = ev, di_tys = tys })
   | isGiven ev
   , Just (str_ty, _) <- isIPPred_maybe cls tys
   = updInertSet $ \ inerts@(IS { inert_cans = ics, inert_solved_dicts = solved }) ->
-    inerts { inert_cans         = updDicts (filterDicts (keep_can str_ty)) ics
-           , inert_solved_dicts = filterDicts (keep_solved str_ty) solved }
+    let dicts' = filterDicts (keep_can str_ty) (inert_dicts ics)
+        deps'  = rebuildDictDeps dicts'
+    in inerts { inert_cans         = ics { inert_dicts = dicts'
+                                         , inert_dict_fvs = deps' }
+              , inert_solved_dicts = filterDicts (keep_solved str_ty) solved }
   | otherwise
   = return ()
   where
@@ -761,7 +764,7 @@ get_sc_pending this_lvl ic@(IC { inert_dicts = dicts, inert_qcis = insts })
     sc_pend_dicts = foldDicts get_pending dicts []
     dicts' = foldr exhaustAndAdd dicts sc_pend_dicts
 
-    (sc_pend_insts, insts') = mapAccumL get_pending_inst [] insts
+    (sc_pend_insts, insts') = mapAccumLQCInsts get_pending_inst [] insts
 
     exhaustAndAdd :: DictCt -> DictMap DictCt -> DictMap DictCt
     exhaustAndAdd ct dicts = addDict (ct {di_pend_sc = doNotExpand}) dicts
@@ -809,7 +812,7 @@ getUnsolvedInerts
             unsolved_fun_eqs = foldFunEqs (add_if_unsolved CEqCan)    fun_eqs emptyCts
             unsolved_irreds  = foldr      (add_if_unsolved CIrredCan) emptyCts irreds
             unsolved_dicts   = foldDicts  (add_if_unsolved CDictCan)  idicts emptyCts
-            unsolved_qcis    = foldr      (add_if_unsolved CQuantCan) emptyCts qcis
+            unsolved_qcis    = foldr      (add_if_unsolved CQuantCan) emptyCts (allQCInsts qcis)
 
       ; traceTcS "getUnsolvedInerts" $
         vcat [ text " tv eqs =" <+> ppr unsolved_tv_eqs
@@ -872,7 +875,7 @@ removeInertCts cts icans = foldl' removeInertCt icans cts
 removeInertCt :: InertCans -> Ct -> InertCans
 removeInertCt is ct
   = case ct of
-      CDictCan dict_ct -> is { inert_dicts = delDict dict_ct (inert_dicts is) }
+      CDictCan dict_ct -> delDictFromCans dict_ct is
       CEqCan    eq_ct  -> delEq    eq_ct is
       CIrredCan ir_ct  -> delIrred ir_ct is
       CQuantCan {}     -> panic "removeInertCt: CQuantCan"

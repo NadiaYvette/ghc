@@ -3207,7 +3207,7 @@ lookup_eq_in_qcis (CtGiven {}) _ _ _
 lookup_eq_in_qcis ev@(CtWanted (WantedCt { ctev_dest = dest, ctev_loc = loc })) eq_rel lhs rhs
   = do { ev_binds_var <- simpleStage getTcEvBindsVar
        ; ics          <- simpleStage getInertCans
-       ; if null (inert_qcis ics)          -- Shortcut common case
+       ; if nullQCInstIndex (inert_qcis ics)  -- Shortcut common case
             || isCoEvBindsVar ev_binds_var -- See Note [Instances in no-evidence implications]
          then nopStage ()
          else -- Try looking for both (lhs~rhs) anr (rhs~lhs); see #23333
