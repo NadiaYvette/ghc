@@ -1119,6 +1119,33 @@ as such you shouldn't need to set any of them explicitly. A flag
     as the :ghc-flag:`-fregs-graph` one but also enables iterative coalescing
     during register allocation.
 
+.. ghc-flag:: -fregs-ssa
+    :shortdesc: Use the SSA-based register allocator in the native code generator.
+    :type: dynamic
+    :reverse: -fno-regs-ssa
+    :category:
+
+    :default: off
+
+    *Only applies in combination with the native code generator.* Use a
+    dominator-tree-preorder greedy register allocator based on the SSA form of
+    the Cmm code (Hack, Grund, Goos, CC 2006). This allocator can produce
+    better code than the default linear allocator by exploiting SSA properties
+    for live range computation.
+
+.. ghc-flag:: -fincremental-simplifier
+    :shortdesc: Use the incremental (worklist-driven) Core simplifier.
+    :type: dynamic
+    :reverse: -fno-incremental-simplifier
+    :category:
+
+    :default: off
+
+    Use an incremental, worklist-driven Core simplifier instead of the default
+    whole-program simplifier. The incremental simplifier only re-simplifies
+    sub-expressions affected by inlining or rewriting, potentially reducing
+    compilation time for large modules.
+
 .. ghc-flag:: -fsimplifier-phases=⟨n⟩
     :shortdesc: *default: 2.* Set the number of phases for the simplifier.
         Ignored with :ghc-flag:`-O0`.
